@@ -157,6 +157,12 @@ export default function GamePage({ params }: { params: Promise<{ id: string }> }
               {game.termination} &middot; {game.moves_count} moves &middot;{" "}
               {game.duration_seconds.toFixed(0)}s
             </span>
+            {game.opening_name && (
+              <span className="text-xs text-accent">
+                {game.opening_eco && <span className="font-[family-name:var(--font-mono)] mr-1">{game.opening_eco}</span>}
+                {game.opening_name}
+              </span>
+            )}
           </div>
 
           {/* Stat summary */}

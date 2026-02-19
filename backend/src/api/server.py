@@ -16,6 +16,7 @@ from sqlmodel import Session, select
 
 from src.analysis.analyzer import StockfishAnalyzer
 from src.api.models import (
+    AccuracyDistribution,
     GameAnalysisResponse,
     GameDetail,
     GameListResponse,
@@ -340,6 +341,8 @@ async def list_games(limit: int = 20, offset: int = 0, session: Session = Depend
             black_accuracy=game.black_accuracy,
             duration_seconds=game.duration_seconds,
             completed_at=game.completed_at,
+            opening_eco=game.opening_eco,
+            opening_name=game.opening_name,
         )
         for game in games
     ]
@@ -381,6 +384,8 @@ async def get_game(game_id: int, session: Session = Depends(get_session)) -> Gam
         white_cost_usd=game.white_cost_usd,
         black_cost_usd=game.black_cost_usd,
         started_at=game.started_at,
+        opening_eco=game.opening_eco,
+        opening_name=game.opening_name,
     )
 
 
@@ -443,6 +448,59 @@ async def get_player_stats(player_name: str, session: Session = Depends(get_sess
         total_tokens=player.total_tokens,
         total_cost_usd=round(player.total_cost_usd, 4),
         blunder_rate=round(blunder_rate, 2),
+    )
+
+
+@app.get("/api/players/{player_name}/accuracy-distribution", response_model=AccuracyDistribution)
+async def get_player_accuracy_distribution(
+    player_name: str, session: Session = Depends(get_session)
+) -> AccuracyDistribution:
+    player = session.exec(select(Player).where(Player.name == player_name)).first()
+    if player is None:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    games = session.exec(
+        select(Game).where(or_(Game.white_id == player.id, Game.black_id == player.id))
+    ).all()
+
+    if not games:
+        return AccuracyDistribution()
+
+    game_ids = [g.id for g in games]
+    color_conditions = []
+    for g in games:
+        if g.white_id == player.id:
+            color_conditions.append(
+                (MoveAnalysis.game_id == g.id) & (MoveAnalysis.color == "white")
+            )
+        if g.black_id == player.id:
+            color_conditions.append(
+                (MoveAnalysis.game_id == g.id) & (MoveAnalysis.color == "black")
+            )
+
+    moves = session.exec(
+        select(MoveAnalysis).where(
+            MoveAnalysis.game_id.in_(game_ids),
+            or_(*color_conditions),
+        )
+    ).all()
+
+    counts: dict[str, int] = {
+        "best": 0, "excellent": 0, "good": 0,
+        "inaccuracy": 0, "mistake": 0, "blunder": 0,
+    }
+    for m in moves:
+        if m.classification in counts:
+            counts[m.classification] += 1
+
+    return AccuracyDistribution(
+        best=counts["best"],
+        excellent=counts["excellent"],
+        good=counts["good"],
+        inaccuracy=counts["inaccuracy"],
+        mistake=counts["mistake"],
+        blunder=counts["blunder"],
+        total_moves=len(moves),
     )
 
 

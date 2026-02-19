@@ -4,6 +4,7 @@ import type {
   GameDetail,
   GameAnalysisResponse,
   PlayerStats,
+  AccuracyDistribution,
   LiveStateResponse,
 } from "./types";
 
@@ -41,6 +42,14 @@ export function getGameAnalysis(id: number): Promise<GameAnalysisResponse> {
 export function getPlayerStats(name: string): Promise<PlayerStats> {
   return fetchJSON<PlayerStats>(
     `/api/players/${encodeURIComponent(name)}/stats`
+  );
+}
+
+export function getPlayerAccuracyDistribution(
+  name: string
+): Promise<AccuracyDistribution> {
+  return fetchJSON<AccuracyDistribution>(
+    `/api/players/${encodeURIComponent(name)}/accuracy-distribution`
   );
 }
 

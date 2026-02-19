@@ -3,23 +3,29 @@
 import { useEffect, useState, use } from "react";
 import Link from "next/link";
 import { motion } from "motion/react";
-import { getPlayerStats } from "@/lib/api";
-import type { PlayerStats } from "@/lib/types";
+import { getPlayerStats, getPlayerAccuracyDistribution } from "@/lib/api";
+import type { PlayerStats, AccuracyDistribution } from "@/lib/types";
 import Navigation from "@/components/Navigation";
+import AccuracyDistributionChart from "@/components/AccuracyDistributionChart";
 
 export default function PlayerPage({ params }: { params: Promise<{ name: string }> }) {
   const { name } = use(params);
   const playerName = decodeURIComponent(name);
 
   const [stats, setStats] = useState<PlayerStats | null>(null);
+  const [distribution, setDistribution] = useState<AccuracyDistribution | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
       try {
-        const s = await getPlayerStats(playerName);
+        const [s, d] = await Promise.all([
+          getPlayerStats(playerName),
+          getPlayerAccuracyDistribution(playerName),
+        ]);
         setStats(s);
+        setDistribution(d);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Player not found");
       } finally {
@@ -116,6 +122,21 @@ export default function PlayerPage({ params }: { params: Promise<{ name: string 
               </motion.div>
             ))}
           </div>
+
+          {/* Accuracy Distribution */}
+          {distribution && distribution.total_moves > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.4 }}
+              className="mt-8 rounded-lg border border-border bg-surface p-4"
+            >
+              <h2 className="mb-3 font-[family-name:var(--font-display)] text-sm font-semibold uppercase tracking-wider text-secondary">
+                Move Classification Distribution
+              </h2>
+              <AccuracyDistributionChart distribution={distribution} />
+            </motion.div>
+          )}
 
           {/* Back link */}
           <div className="mt-8">

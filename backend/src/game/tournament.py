@@ -216,6 +216,8 @@ class TournamentManager:
             white_cost_usd=game_result["white_cost_usd"],
             black_cost_usd=game_result["black_cost_usd"],
             duration_seconds=game_result["duration_seconds"],
+            opening_name=game_result.get("opening_name"),
+            opening_eco=game_result.get("opening_eco"),
             started_at=started_at,
             completed_at=completed_at,
         )

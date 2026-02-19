@@ -51,6 +51,8 @@ export interface GameSummary {
   black_accuracy: number;
   duration_seconds: number;
   completed_at: string | null;
+  opening_eco: string | null;
+  opening_name: string | null;
 }
 
 export interface GameListResponse {
@@ -114,6 +116,16 @@ export interface PlayerStats {
   total_tokens: number;
   total_cost_usd: number;
   blunder_rate: number;
+}
+
+export interface AccuracyDistribution {
+  best: number;
+  excellent: number;
+  good: number;
+  inaccuracy: number;
+  mistake: number;
+  blunder: number;
+  total_moves: number;
 }
 
 export interface LiveStateResponse {

@@ -29,6 +29,8 @@ class GameSummary(BaseModel):
     black_accuracy: float
     duration_seconds: float
     completed_at: datetime | None = None
+    opening_eco: str | None = None
+    opening_name: str | None = None
 
 
 class GameListResponse(BaseModel):
@@ -92,6 +94,16 @@ class PlayerStats(BaseModel):
     total_tokens: int
     total_cost_usd: float
     blunder_rate: float
+
+
+class AccuracyDistribution(BaseModel):
+    best: int = 0
+    excellent: int = 0
+    good: int = 0
+    inaccuracy: int = 0
+    mistake: int = 0
+    blunder: int = 0
+    total_moves: int = 0
 
 
 class LiveStateResponse(BaseModel):

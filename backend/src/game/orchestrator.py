@@ -10,6 +10,7 @@ import chess
 import chess.pgn
 
 from src.analysis.analyzer import MoveEval, StockfishAnalyzer
+from src.game.openings import detect_opening
 from src.players.base import MoveResult, PlayerAdapter
 
 
@@ -267,6 +268,8 @@ class GameOrchestrator:
                 return 0.0
             return avg([self.analyzer.move_accuracy(cpl) for cpl in cpls])
 
+        opening_eco, opening_name = detect_opening(str(game))
+
         return {
             "game_id": game_id,
             "white": white.get_name(),
@@ -290,5 +293,7 @@ class GameOrchestrator:
             "white_cost_usd": round(w_cost, 4),
             "black_cost_usd": round(b_cost, 4),
             "duration_seconds": round(time.time() - start_time, 1),
+            "opening_eco": opening_eco,
+            "opening_name": opening_name,
             "move_analyses": analyses,
         }
