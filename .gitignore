@@ -6,3 +6,10 @@ backend/src/**/__pycache__/
 backend/tests/**/__pycache__/
 *.pyc
 backend/uv.lock
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+
+.env

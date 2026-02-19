@@ -1,46 +1,91 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- Root contains high-level docs: `SYSTEM_DESIGN.md`, `README.md`, and this guide.
-- All application code is in `backend/`.
-- Backend source lives in `backend/src/` with feature-first modules:
-  - `api/` FastAPI routes and API models
-  - `game/` orchestration, tournament logic, player factory
-  - `players/` LLM/engine adapters
-  - `analysis/` Stockfish-based analysis
-  - `db/` SQLModel models and session helpers
-  - `config.py` environment-backed settings
-- Tests are in `backend/tests/` and mirror runtime modules.
-- Utility scripts are in `backend/scripts/`.
+- Root contains high-level docs: `SYSTEM_DESIGN.md`, `README.md`, `AGENTS.md`, and `CLAUDE.md`.
+- Backend code is in `backend/` (FastAPI + SQLModel + python-chess).
+- Frontend code is in `frontend/` (Next.js App Router + TypeScript + Tailwind CSS v4).
+
+### Backend
+- Runtime source is in `backend/src/`:
+  - `api/`: FastAPI routes and API response/request models
+  - `game/`: orchestration, tournament manager, player factory, Elo updates
+  - `players/`: LLM and UCI engine adapters
+  - `analysis/`: Stockfish move evaluation and accuracy/CPL classification
+  - `db/`: SQLModel entities and DB session/init helpers
+  - `config.py`: environment-backed settings (`pydantic-settings`)
+- Entrypoints:
+  - `backend/main.py` and `backend/src/main.py`
+- Utility scripts:
+  - `backend/scripts/run_engine_match.py`
+  - `backend/scripts/run_llm_match.py`
+- Tests:
+  - `backend/tests/test_*.py`
+
+### Frontend
+- App source is in `frontend/src/`:
+  - `app/`: routes (`/`, `/games/[id]`, `/players/[name]`) and global layout/styles
+  - `components/`: reusable UI (board, charts, move list, scoreboard, nav)
+  - `hooks/`: live tournament state and WebSocket lifecycle
+  - `lib/`: typed API client and shared TypeScript interfaces
+- Config:
+  - `frontend/next.config.ts` rewrites `/api/*` and `/health` to backend localhost by default.
 
 ## Build, Test, and Development Commands
-Run commands from `backend/` unless noted.
-- `uv sync` installs runtime + dev dependencies from `pyproject.toml`/`uv.lock`.
-- `uv run uvicorn src.api.server:app --reload --host 0.0.0.0 --port 8000` starts the API locally.
-- `uv run pytest -q` runs the full test suite.
+Run commands from the relevant subdirectory.
+
+### Backend (`backend/`)
+- `uv sync` installs dependencies from `pyproject.toml`.
+- `uv run uvicorn src.api.server:app --reload --host 0.0.0.0 --port 8000` starts the API.
+- `uv run pytest -q` runs backend tests.
 - `uv run ruff check .` runs lint checks.
-- `uv run python scripts/run_engine_match.py` runs a local engine-vs-engine match script.
+- `uv run python scripts/run_engine_match.py` runs local engine-vs-engine.
+- `uv run python scripts/run_llm_match.py` runs local LLM-vs-LLM (requires API keys).
+
+### Frontend (`frontend/`)
+- `npm install` installs dependencies.
+- `npm run dev` starts Next.js dev server (`http://localhost:3000`).
+- `npm run build` runs a production build (use as the main frontend validation step).
+- `npm run start` serves the production build.
 
 ## Coding Style & Naming Conventions
-- Python 3.11+ (`backend/pyproject.toml` requires `>=3.11`; `.python-version` is `3.11`).
-- Follow PEP 8 with 4-space indentation and explicit type hints.
-- Naming: `snake_case` for modules/functions/variables, `PascalCase` for classes, `UPPER_SNAKE_CASE` for constants.
-- Keep API schemas in `api/models.py`; avoid defining ad-hoc response dicts in route handlers.
+
+### Python (backend)
+- Python `>=3.11`.
+- Follow PEP 8, 4-space indentation, and explicit type hints.
+- Naming:
+  - `snake_case` for modules/functions/variables
+  - `PascalCase` for classes
+  - `UPPER_SNAKE_CASE` for constants
+- Keep API schemas centralized in `backend/src/api/models.py`.
+- Prefer pure, testable orchestration logic in `game/` and persistence logic in `db/`/`tournament.py`.
+
+### TypeScript/React (frontend)
+- Keep strict typing; reuse shared interfaces in `frontend/src/lib/types.ts`.
+- Keep backend calls in `frontend/src/lib/api.ts` instead of ad-hoc `fetch` calls in components.
+- Prefer composable client components and hooks; keep WebSocket/state logic inside hooks.
+- Use `PascalCase` for components, `camelCase` for functions/variables.
 
 ## Testing Guidelines
-- Framework: `pytest` with `pytest-asyncio` for async coverage.
-- Test files use `test_*.py`; test names should describe behavior (`test_start_tournament_rejects_when_running`).
-- Add or update tests for every behavioral change in API, orchestration, or DB persistence.
+- Backend framework is `pytest` with `pytest-asyncio` for async flows.
+- Add/update backend tests for behavior changes in API, orchestration, DB persistence, or Elo/stat calculations.
+- Use temporary sqlite DBs in tests (see existing API/tournament tests) instead of relying on `backend/arena.db`.
+- Frontend currently has no automated test suite in this repo; for frontend changes, at minimum run `npm run build` and manually verify affected routes/components.
 
 ## Commit & Pull Request Guidelines
-- Current history is minimal (`init`, `Initial commit`); prefer clear imperative commit subjects (example: `add tournament standings endpoint`).
-- Keep commits scoped and logically grouped.
+- History is still short (`Initial commit`, `init`, `Phase 3`); use clear imperative commit subjects (example: `add live tournament reconnect handling`).
+- Keep commits scoped to one logical change.
 - PRs should include:
   - what changed and why
-  - impacted modules/endpoints
-  - test evidence (command + result, e.g., `uv run pytest -q`)
-  - sample request/response for API changes when relevant
+  - impacted backend endpoints/modules and/or frontend routes/components
+  - verification evidence (commands + results), e.g. `uv run pytest -q`, `npm run build`
+  - API request/response examples for contract changes
 
 ## Security & Configuration Tips
-- Copy `backend/.env.example` to `.env` and set API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`).
-- Do not commit secrets or local runtime artifacts generated during development.
+- Backend env setup:
+  - `cp backend/.env.example backend/.env`
+  - configure `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, and `STOCKFISH_PATH`
+- Frontend optional env vars:
+  - `NEXT_PUBLIC_API_URL` (REST base URL)
+  - `NEXT_PUBLIC_WS_URL` (live WebSocket URL)
+- Never commit secrets or local env files.
+- Avoid committing runtime artifacts/caches (`__pycache__`, `.next`, local DB churn) unless explicitly intended.
