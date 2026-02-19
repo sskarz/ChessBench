@@ -3,7 +3,7 @@
 ## Project Structure & Module Organization
 - Root contains high-level docs plus deploy/dev setup files: `SYSTEM_DESIGN.md`, `README.md`, `AGENTS.md`, `CLAUDE.md`, `.env.example`, and `docker-compose.yml`.
 - Backend code is in `backend/` (FastAPI + SQLModel + python-chess).
-- Frontend code is in `frontend/` (Next.js App Router + TypeScript + Tailwind CSS v4).
+- Frontend code is in `frontend/` (Next.js 16 App Router + React 19 + TypeScript + Tailwind CSS v4).
 
 ### Backend
 - Runtime source is in `backend/src/`:
@@ -13,6 +13,7 @@
   - `analysis/`: Stockfish move evaluation and accuracy/CPL classification
   - `db/`: SQLModel entities and DB session/init helpers
   - `config.py`: environment-backed settings (`pydantic-settings`)
+- Live API surface includes `/api/live`, `POST /api/tournament/start` (returns run/player payload), and `WS /ws/live`.
 - Entrypoints:
   - `backend/main.py` and `backend/src/main.py`
 - Utility scripts:
@@ -27,6 +28,7 @@
   - `components/`: reusable UI (board, charts, move list, scoreboard, nav)
   - `hooks/`: live tournament state and WebSocket lifecycle
   - `lib/`: typed API client and shared TypeScript interfaces
+- Home route supports starting tournaments directly from the UI (calls `POST /api/tournament/start`).
 - Config:
   - `frontend/next.config.ts` rewrites `/api/*` and `/health` using `BACKEND_URL` (default `http://localhost:8000`).
   - Browser-side API/WS targets come from `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_WS_URL`.
@@ -41,6 +43,7 @@ Run commands from the relevant subdirectory.
 ### Backend (`backend/`)
 - `uv sync` installs dependencies from `pyproject.toml`.
 - `uv run uvicorn src.api.server:app --reload --host 0.0.0.0 --port 8000` starts the API.
+- `curl -X POST http://localhost:8000/api/tournament/start -H 'Content-Type: application/json' -d '{"rounds":1}'` starts a tournament from API.
 - `uv run pytest -q` runs backend tests.
 - `uv run ruff check .` runs lint checks.
 - `uv run python scripts/run_engine_match.py` runs local engine-vs-engine.
@@ -92,7 +95,8 @@ Run commands from the relevant subdirectory.
   - `cp backend/.env.example backend/.env`
   - configure `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `STOCKFISH_PATH`
   - tune runtime via `DATABASE_URL`, `ANALYSIS_DEPTH`, `STOCKFISH_THREADS`, `STOCKFISH_HASH_MB`, `MOVE_DELAY_SECONDS`, `MAX_MOVES_PER_SIDE`, `LLM_MAX_RETRIES`, `LLM_TEMPERATURE`
-  - optional: set `PLAYERS` as a JSON array to override the default tournament roster in `backend/src/config.py`
+  - optional: set `PLAYERS` as a JSON array to override the default tournament roster in `backend/src/config.py` (current defaults: GPT-5.2, Claude Opus, Gemini 3.1 Pro, Stockfish-800)
+  - `PLAYERS` supports both LLM and engine entries; engine entries can include `engine_path`, `time_limit`, `skill_level`, and `elo_limit`
 - Frontend optional env vars:
   - `BACKEND_URL` (used by Next.js rewrites in `next.config.ts`)
   - `NEXT_PUBLIC_API_URL` (REST base URL)

@@ -6,6 +6,7 @@ import type {
   PlayerStats,
   AccuracyDistribution,
   LiveStateResponse,
+  TournamentStartResponse,
 } from "./types";
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -55,4 +56,22 @@ export function getPlayerAccuracyDistribution(
 
 export function getLiveState(): Promise<LiveStateResponse> {
   return fetchJSON<LiveStateResponse>("/api/live");
+}
+
+export async function startTournament(
+  rounds: number = 1
+): Promise<TournamentStartResponse> {
+  const res = await fetch(`${BASE_URL}/api/tournament/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rounds }),
+  });
+  if (!res.ok) {
+    const msg =
+      res.status === 409
+        ? "Tournament already running"
+        : `API ${res.status}: ${res.statusText}`;
+    throw new Error(msg);
+  }
+  return res.json() as Promise<TournamentStartResponse>;
 }

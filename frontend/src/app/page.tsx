@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { useGameState } from "@/hooks/useGameState";
+import { startTournament } from "@/lib/api";
 import Navigation from "@/components/Navigation";
 import LiveBoard from "@/components/LiveBoard";
 import EvalBar from "@/components/EvalBar";
@@ -25,6 +27,26 @@ export default function Home() {
     tournamentStatus,
     error,
   } = useGameState();
+
+  const [isStarting, setIsStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
+
+  const tournamentBusy =
+    isStarting ||
+    tournamentStatus === "running" ||
+    tournamentStatus === "queued";
+
+  async function handleStartTournament() {
+    setIsStarting(true);
+    setStartError(null);
+    try {
+      await startTournament(1);
+    } catch (err) {
+      setStartError(err instanceof Error ? err.message : "Failed to start tournament");
+    } finally {
+      setIsStarting(false);
+    }
+  }
 
   const lastMove = moves.length > 0 ? moves[moves.length - 1] : null;
   const lastMoveUci = lastMove?.move_uci;
@@ -149,15 +171,29 @@ export default function Home() {
 
               {/* Idle state */}
               {!isGameActive && !white && !black && (
-                <div className="flex items-center justify-center rounded-lg border border-border bg-surface p-12 text-center">
-                  <div>
-                    <p className="font-[family-name:var(--font-display)] text-lg font-semibold text-secondary">
-                      No active game
+                <div className="flex flex-col items-center justify-center rounded-lg border border-border bg-surface p-12 text-center">
+                  <p className="font-[family-name:var(--font-display)] text-lg font-semibold text-secondary">
+                    No active game
+                  </p>
+                  <button
+                    onClick={handleStartTournament}
+                    disabled={tournamentBusy}
+                    className="mt-4 rounded-lg bg-accent px-6 py-2.5 font-[family-name:var(--font-display)] text-sm font-semibold text-white transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {tournamentBusy ? (
+                      <span className="flex items-center gap-2">
+                        <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                        Tournament in Progress...
+                      </span>
+                    ) : (
+                      "Start Tournament"
+                    )}
+                  </button>
+                  {startError && (
+                    <p className="mt-2 text-xs text-[var(--clr-blunder)]">
+                      {startError}
                     </p>
-                    <p className="mt-1 text-sm text-muted">
-                      Start a tournament via the API to begin watching.
-                    </p>
-                  </div>
+                  )}
                 </div>
               )}
             </div>

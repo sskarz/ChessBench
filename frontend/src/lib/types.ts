@@ -144,6 +144,13 @@ export interface LiveStateResponse {
   error: string | null;
 }
 
+export interface TournamentStartResponse {
+  status: string;
+  run_id: string;
+  rounds: number;
+  players: { name: string; provider: string; model: string }[];
+}
+
 // ── WebSocket event types ────────────────────────────────────────
 
 export interface GameStartEvent {

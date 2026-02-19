@@ -1,10 +1,11 @@
 # ChessBench — LLM Chess Arena
 
-A platform where LLMs (Claude, GPT-4o, Gemini) play chess against each other and against Stockfish. Games are analyzed move-by-move in real time, with Elo ratings, accuracy metrics, and live spectating via WebSocket.
+A platform where LLMs and engines play chess against each other with live analysis. The default roster currently includes GPT-5.2, Claude Opus, Gemini 3.1 Pro, and Stockfish-800. Games are analyzed move-by-move in real time, with Elo ratings, accuracy metrics, and live spectating via WebSocket.
 
 ## Features
 
 - **Live spectating** — watch games unfold in real time with animated board, eval bar, and move-by-move analysis
+- **One-click tournament start** — launch a tournament directly from the home page (or via API)
 - **Deep analytics** — per-move Stockfish evaluation, centipawn loss, accuracy charts, and move classification (best/excellent/good/inaccuracy/mistake/blunder)
 - **Elo ratings** — K=32 system tracking relative LLM strength across round-robin tournaments
 - **ECO opening detection** — automatic opening identification from a ~150-entry ECO table
@@ -21,7 +22,8 @@ docker compose up --build
 
 - Frontend: http://localhost:3000
 - Backend API: http://localhost:8000
-- Start a tournament: `curl -X POST http://localhost:8000/api/tournament/start -H 'Content-Type: application/json' -d '{"rounds":1}'`
+- Start a tournament from the UI button on `/`, or via API:
+  `curl -X POST http://localhost:8000/api/tournament/start -H 'Content-Type: application/json' -d '{"rounds":1}'`
 
 ## Development Setup
 
@@ -41,6 +43,15 @@ uv sync
 uv run uvicorn src.api.server:app --reload --host 0.0.0.0 --port 8000
 ```
 
+Optional roster override via env:
+
+```bash
+export PLAYERS='[
+  {"name":"Stockfish-1200","provider":"engine","model":"stockfish","elo_limit":1200},
+  {"name":"Stockfish-800","provider":"engine","model":"stockfish","elo_limit":800}
+]'
+```
+
 ### Frontend
 
 ```bash
@@ -49,7 +60,27 @@ npm install
 npm run dev              # Starts on http://localhost:3000
 ```
 
-The frontend dev server proxies `/api/*` requests to `localhost:8000` automatically.
+Browser API/WS targets are controlled by:
+- `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`)
+- `NEXT_PUBLIC_WS_URL` (default `ws://localhost:8000/ws/live`)
+
+## Tournament Start Response
+
+`POST /api/tournament/start` returns `202 Accepted` and includes the active player config list:
+
+```json
+{
+  "status": "accepted",
+  "run_id": "abc123def4",
+  "rounds": 1,
+  "players": [
+    { "name": "GPT-5.2", "provider": "openai", "model": "gpt-5.2" },
+    { "name": "Claude Opus", "provider": "anthropic", "model": "claude-opus-4-6" },
+    { "name": "Gemini 3.1 Pro", "provider": "google", "model": "gemini-3.1-pro-preview" },
+    { "name": "Stockfish-800", "provider": "engine", "model": "stockfish" }
+  ]
+}
+```
 
 ## Running Tests
 
@@ -68,13 +99,13 @@ npm run build            # Type-check (no ESLint configured)
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│              FRONTEND (Next.js 15 + TypeScript)         │
+│        FRONTEND (Next.js 16 + React 19 + TypeScript)     │
 │                                                         │
 │  Live Board ─── Scoreboard ─── Game Archive ─── Player  │
 │  (react-        (Elo, W/L/D    (replay, PGN    Profile  │
 │   chessboard)    accuracy)      eval charts)   (stats)  │
 │                       │                                  │
-│                  WebSocket + REST (via proxy)            │
+│            WebSocket + REST (configurable URLs)          │
 └───────────────────────┼─────────────────────────────────┘
                         │
 ┌───────────────────────┼─────────────────────────────────┐
@@ -107,7 +138,7 @@ npm run build            # Type-check (no ESLint configured)
 | GET | `/api/players/{name}/stats` | Player statistics |
 | GET | `/api/players/{name}/accuracy-distribution` | Move classification counts |
 | GET | `/api/live` | Current live state |
-| POST | `/api/tournament/start` | Start a tournament |
+| POST | `/api/tournament/start` | Start a tournament (202 accepted with run/player payload) |
 | WS | `/ws/live` | Live game WebSocket |
 
 ## License

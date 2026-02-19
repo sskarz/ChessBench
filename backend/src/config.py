@@ -25,14 +25,13 @@ class Settings(BaseSettings):
 
     players: list[dict[str, Any]] = Field(
         default_factory=lambda: [
-            {"name": "GPT-4o", "provider": "openai", "model": "gpt-4o"},
-            {"name": "o4-mini", "provider": "openai", "model": "o4-mini"},
+            {"name": "GPT-5.2", "provider": "openai", "model": "gpt-5.2"},
             {
-                "name": "Claude Sonnet",
+                "name": "Claude Opus",
                 "provider": "anthropic",
-                "model": "claude-sonnet-4-5-20250929",
+                "model": "claude-opus-4-6",
             },
-            {"name": "Gemini 2.5 Pro", "provider": "google", "model": "gemini-2.5-pro"},
+            {"name": "Gemini 3.1 Pro", "provider": "google", "model": "gemini-3.1-pro-preview"},
             {
                 "name": "Stockfish-800",
                 "provider": "engine",
