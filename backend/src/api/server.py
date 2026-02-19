@@ -1,0 +1,451 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
+from uuid import uuid4
+
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import func, or_
+from sqlmodel import Session, select
+
+from src.analysis.analyzer import StockfishAnalyzer
+from src.api.models import (
+    GameAnalysisResponse,
+    GameDetail,
+    GameListResponse,
+    GameSummary,
+    HealthResponse,
+    LiveStateResponse,
+    MoveAnalysisEntry,
+    PlayerStats,
+    StandingsEntry,
+    TournamentStartRequest,
+    TournamentStartResponse,
+)
+from src.config import settings
+from src.db.models import Game, MoveAnalysis, Player
+from src.db.session import engine, get_session, init_db
+from src.game.orchestrator import GameConfig, GameOrchestrator
+from src.game.player_factory import build_players_from_settings, describe_player_config
+from src.game.tournament import TournamentManager
+from src.players.base import PlayerAdapter
+
+logger = logging.getLogger(__name__)
+
+
+class ConnectionManager:
+    def __init__(self) -> None:
+        self.active: list[WebSocket] = []
+
+    async def connect(self, ws: WebSocket) -> None:
+        await ws.accept()
+        self.active.append(ws)
+
+    def disconnect(self, ws: WebSocket) -> None:
+        if ws in self.active:
+            self.active.remove(ws)
+
+    async def broadcast(self, message: dict[str, Any]) -> None:
+        data = json.dumps(message, default=str)
+        stale: list[WebSocket] = []
+        for ws in self.active:
+            try:
+                await ws.send_text(data)
+            except Exception:
+                stale.append(ws)
+
+        for ws in stale:
+            self.disconnect(ws)
+
+
+@dataclass
+class LiveState:
+    status: str = "idle"
+    run_id: str | None = None
+    current_game: dict[str, Any] | None = None
+    last_event: dict[str, Any] | None = None
+    latest_standings: list[dict[str, Any]] = field(default_factory=list)
+    started_at: datetime | None = None
+    updated_at: datetime | None = None
+    error: str | None = None
+
+
+class AppRuntime:
+    def __init__(self) -> None:
+        self.manager = ConnectionManager()
+        self.live = LiveState(updated_at=datetime.utcnow())
+        self.tournament_task: asyncio.Task[Any] | None = None
+
+
+runtime = AppRuntime()
+
+
+def _now() -> datetime:
+    return datetime.utcnow()
+
+
+def _new_session() -> Session:
+    return Session(engine)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    runtime.live.updated_at = _now()
+    yield
+
+
+app = FastAPI(title="LLM Chess Arena", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def _standings_from_db(session: Session) -> list[StandingsEntry]:
+    players = session.exec(select(Player)).all()
+    standings: list[StandingsEntry] = []
+
+    for player in players:
+        games = session.exec(
+            select(Game).where(or_(Game.white_id == player.id, Game.black_id == player.id))
+        ).all()
+        blunders = sum(
+            game.white_blunders if game.white_id == player.id else game.black_blunders
+            for game in games
+        )
+        blunder_rate = blunders / max(len(games), 1)
+
+        standings.append(
+            StandingsEntry(
+                name=player.name,
+                elo=round(player.elo, 1),
+                wins=player.wins,
+                losses=player.losses,
+                draws=player.draws,
+                avg_accuracy=round(player.avg_accuracy, 1),
+                avg_cpl=round(player.avg_cpl, 1),
+                blunder_rate=round(blunder_rate, 2),
+                total_cost_usd=round(player.total_cost_usd, 4),
+            )
+        )
+
+    standings.sort(key=lambda row: (-row.elo, row.name))
+    return standings
+
+
+def _player_name_map(session: Session, games: list[Game]) -> dict[int, str]:
+    ids = set()
+    for game in games:
+        ids.add(game.white_id)
+        ids.add(game.black_id)
+
+    mapping: dict[int, str] = {}
+    for pid in ids:
+        player = session.get(Player, pid)
+        if player:
+            mapping[pid] = player.name
+    return mapping
+
+
+async def _handle_tournament_event(event: dict[str, Any]) -> None:
+    runtime.live.updated_at = _now()
+    runtime.live.last_event = event
+
+    if event.get("type") == "game_start":
+        runtime.live.current_game = {
+            "game_id": event.get("game_id"),
+            "white": event.get("white"),
+            "black": event.get("black"),
+            "round": event.get("round"),
+        }
+
+    if event.get("type") == "game_end":
+        standings = event.get("standings", [])
+        runtime.live.latest_standings = standings if isinstance(standings, list) else []
+
+    await runtime.manager.broadcast(event)
+
+
+def _live_response() -> LiveStateResponse:
+    standings = [StandingsEntry(**entry) for entry in runtime.live.latest_standings]
+    return LiveStateResponse(
+        status=runtime.live.status,
+        run_id=runtime.live.run_id,
+        current_game=runtime.live.current_game,
+        last_event=runtime.live.last_event,
+        latest_standings=standings,
+        started_at=runtime.live.started_at,
+        updated_at=runtime.live.updated_at,
+        error=runtime.live.error,
+    )
+
+
+async def _run_tournament(
+    run_id: str,
+    rounds: int,
+    players: list[PlayerAdapter],
+    descriptors: dict[str, dict[str, str]],
+) -> None:
+    analyzer = StockfishAnalyzer(
+        engine_path=settings.stockfish_path,
+        depth=settings.analysis_depth,
+        threads=settings.stockfish_threads,
+        hash_mb=settings.stockfish_hash_mb,
+    )
+
+    orchestrator = GameOrchestrator(
+        analyzer=analyzer,
+        config=GameConfig(
+            max_moves=settings.max_moves_per_side,
+            analyze_depth=settings.analysis_depth,
+            move_delay_seconds=settings.move_delay_seconds,
+        ),
+    )
+
+    manager = TournamentManager(
+        players=players,
+        orchestrator=orchestrator,
+        session_factory=_new_session,
+        event_callback=_handle_tournament_event,
+        rounds=rounds,
+        player_descriptors=descriptors,
+    )
+
+    try:
+        summary = await manager.run_round_robin(rounds=rounds)
+        runtime.live.status = "completed"
+        runtime.live.latest_standings = summary.get("standings", [])
+        runtime.live.current_game = None
+        runtime.live.last_event = {
+            "type": "tournament_complete",
+            "run_id": run_id,
+            "games_played": summary.get("games_played", 0),
+            "standings": summary.get("standings", []),
+        }
+        await runtime.manager.broadcast(runtime.live.last_event)
+    except Exception as exc:
+        runtime.live.status = "error"
+        runtime.live.error = str(exc)
+        runtime.live.current_game = None
+        runtime.live.last_event = {
+            "type": "tournament_error",
+            "run_id": run_id,
+            "error": str(exc),
+        }
+        await runtime.manager.broadcast(runtime.live.last_event)
+        logger.exception("Tournament run failed")
+    finally:
+        runtime.live.updated_at = _now()
+        runtime.tournament_task = None
+        manager.cleanup_players(players)
+        analyzer.shutdown()
+
+
+@app.get("/health", response_model=HealthResponse)
+async def health(session: Session = Depends(get_session)) -> HealthResponse:
+    db_ok = True
+    try:
+        session.exec(select(1)).one()
+    except Exception:
+        db_ok = False
+
+    return HealthResponse(status="ok" if db_ok else "degraded", db_ok=db_ok, live_status=runtime.live.status)
+
+
+@app.websocket("/ws/live")
+async def live_game_ws(ws: WebSocket) -> None:
+    await runtime.manager.connect(ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        runtime.manager.disconnect(ws)
+
+
+@app.post("/api/tournament/start", response_model=TournamentStartResponse, status_code=status.HTTP_202_ACCEPTED)
+async def start_tournament(payload: TournamentStartRequest) -> TournamentStartResponse:
+    if runtime.tournament_task and not runtime.tournament_task.done():
+        raise HTTPException(status_code=409, detail="Tournament is already running")
+
+    players, player_errors = build_players_from_settings(settings)
+    if len(players) < 2:
+        detail = {
+            "message": "Need at least 2 valid players to start tournament",
+            "errors": player_errors,
+        }
+        raise HTTPException(status_code=400, detail=detail)
+
+    run_id = uuid4().hex[:10]
+    runtime.live = LiveState(
+        status="running",
+        run_id=run_id,
+        current_game=None,
+        last_event={"type": "tournament_queued", "run_id": run_id},
+        latest_standings=[],
+        started_at=_now(),
+        updated_at=_now(),
+        error=None,
+    )
+    player_configs = [describe_player_config(player) for player in players]
+
+    runtime.tournament_task = asyncio.create_task(
+        _run_tournament(
+            run_id=run_id,
+            rounds=payload.rounds,
+            players=players,
+            descriptors={row["name"]: row for row in player_configs},
+        )
+    )
+
+    return TournamentStartResponse(
+        status="accepted",
+        run_id=run_id,
+        rounds=payload.rounds,
+        players=player_configs,
+    )
+
+
+@app.get("/api/standings", response_model=list[StandingsEntry])
+async def get_standings(session: Session = Depends(get_session)) -> list[StandingsEntry]:
+    return _standings_from_db(session)
+
+
+@app.get("/api/games", response_model=GameListResponse)
+async def list_games(limit: int = 20, offset: int = 0, session: Session = Depends(get_session)) -> GameListResponse:
+    safe_limit = max(1, min(limit, 200))
+    safe_offset = max(0, offset)
+
+    total = session.exec(select(func.count(Game.id))).one() or 0
+    games = session.exec(select(Game).order_by(Game.id.desc()).offset(safe_offset).limit(safe_limit)).all()
+    names = _player_name_map(session, games)
+
+    items = [
+        GameSummary(
+            id=game.id,
+            white=names.get(game.white_id, f"player-{game.white_id}"),
+            black=names.get(game.black_id, f"player-{game.black_id}"),
+            result=game.result,
+            termination=game.termination,
+            moves_count=game.moves_count,
+            white_accuracy=game.white_accuracy,
+            black_accuracy=game.black_accuracy,
+            duration_seconds=game.duration_seconds,
+            completed_at=game.completed_at,
+        )
+        for game in games
+    ]
+
+    return GameListResponse(total=int(total), limit=safe_limit, offset=safe_offset, items=items)
+
+
+@app.get("/api/games/{game_id}", response_model=GameDetail)
+async def get_game(game_id: int, session: Session = Depends(get_session)) -> GameDetail:
+    game = session.get(Game, game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    white = session.get(Player, game.white_id)
+    black = session.get(Player, game.black_id)
+
+    return GameDetail(
+        id=game.id,
+        white=white.name if white else f"player-{game.white_id}",
+        black=black.name if black else f"player-{game.black_id}",
+        result=game.result,
+        termination=game.termination,
+        moves_count=game.moves_count,
+        white_accuracy=game.white_accuracy,
+        black_accuracy=game.black_accuracy,
+        duration_seconds=game.duration_seconds,
+        completed_at=game.completed_at,
+        pgn=game.pgn,
+        white_avg_cpl=game.white_avg_cpl,
+        black_avg_cpl=game.black_avg_cpl,
+        white_blunders=game.white_blunders,
+        black_blunders=game.black_blunders,
+        white_mistakes=game.white_mistakes,
+        black_mistakes=game.black_mistakes,
+        white_illegal_attempts=game.white_illegal_attempts,
+        black_illegal_attempts=game.black_illegal_attempts,
+        white_tokens=game.white_tokens,
+        black_tokens=game.black_tokens,
+        white_cost_usd=game.white_cost_usd,
+        black_cost_usd=game.black_cost_usd,
+        started_at=game.started_at,
+    )
+
+
+@app.get("/api/games/{game_id}/analysis", response_model=GameAnalysisResponse)
+async def get_game_analysis(game_id: int, session: Session = Depends(get_session)) -> GameAnalysisResponse:
+    game = session.get(Game, game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    rows = session.exec(select(MoveAnalysis).where(MoveAnalysis.game_id == game_id).order_by(MoveAnalysis.id)).all()
+    moves = [
+        MoveAnalysisEntry(
+            move_number=row.move_number,
+            color=row.color,
+            move_uci=row.move_uci,
+            move_san=row.move_san,
+            fen_before=row.fen_before,
+            fen_after=row.fen_after,
+            eval_before_cp=row.eval_before_cp,
+            eval_after_cp=row.eval_after_cp,
+            best_move_uci=row.best_move_uci,
+            best_move_san=row.best_move_san,
+            centipawn_loss=row.centipawn_loss,
+            classification=row.classification,
+            think_time_ms=row.think_time_ms,
+            tokens_used=row.tokens_used,
+            illegal_attempts=row.illegal_attempts,
+        )
+        for row in rows
+    ]
+    return GameAnalysisResponse(game_id=game_id, moves=moves)
+
+
+@app.get("/api/players/{player_name}/stats", response_model=PlayerStats)
+async def get_player_stats(player_name: str, session: Session = Depends(get_session)) -> PlayerStats:
+    player = session.exec(select(Player).where(Player.name == player_name)).first()
+    if player is None:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    games = session.exec(
+        select(Game).where(or_(Game.white_id == player.id, Game.black_id == player.id))
+    ).all()
+    blunders = sum(
+        game.white_blunders if game.white_id == player.id else game.black_blunders
+        for game in games
+    )
+    blunder_rate = blunders / max(len(games), 1)
+
+    return PlayerStats(
+        name=player.name,
+        provider=player.provider,
+        model_id=player.model_id,
+        elo=round(player.elo, 1),
+        games_played=player.games_played,
+        wins=player.wins,
+        losses=player.losses,
+        draws=player.draws,
+        avg_cpl=round(player.avg_cpl, 1),
+        avg_accuracy=round(player.avg_accuracy, 1),
+        total_tokens=player.total_tokens,
+        total_cost_usd=round(player.total_cost_usd, 4),
+        blunder_rate=round(blunder_rate, 2),
+    )
+
+
+@app.get("/api/live", response_model=LiveStateResponse)
+async def get_live_state() -> LiveStateResponse:
+    return _live_response()
