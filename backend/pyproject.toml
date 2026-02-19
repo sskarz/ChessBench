@@ -8,14 +8,14 @@ dependencies = [
     "anthropic>=0.83.0",
     "chess>=1.11.2",
     "fastapi>=0.129.0",
-    "google-generativeai>=0.8.6",
+    "google-genai>=1.0.0",
     "openai>=2.21.0",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.13.1",
     "sqlmodel>=0.0.34",
     "stockfish>=4.0.7",
     "uvicorn>=0.41.0",
-    "websockets>=16.0",
+    "websockets>=13.0",
 ]
 
 [dependency-groups]

@@ -34,3 +34,4 @@ data/
 .vscode/
 *.swp
 *.swo
+backend/uv.lock

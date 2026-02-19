@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -12,6 +13,8 @@ import chess.pgn
 from src.analysis.analyzer import MoveEval, StockfishAnalyzer
 from src.game.openings import detect_opening
 from src.players.base import MoveResult, PlayerAdapter
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -205,7 +208,10 @@ class GameOrchestrator:
                     black_avg_cpl=sum(black_cpls) / max(len(black_cpls), 1),
                     pgn_so_far=str(game),
                 )
-                await self.event_callback(event)
+                try:
+                    await self.event_callback(event)
+                except Exception:
+                    logger.warning("Event callback failed for game %d", game_id, exc_info=True)
 
             if self.config.move_delay_seconds > 0:
                 await asyncio.sleep(self.config.move_delay_seconds)

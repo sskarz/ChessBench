@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import random
 import re
 import time
@@ -9,6 +10,8 @@ from typing import Any
 import chess
 
 from .base import MoveResult, PlayerAdapter
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are a chess grandmaster competing in a tournament.
 Given the current board position (FEN notation) and the list of legal moves
@@ -60,10 +63,9 @@ class LLMPlayer(PlayerAdapter):
             return anthropic.Anthropic(api_key=self.api_key)
 
         if self.provider == "google":
-            import google.generativeai as genai
+            from google import genai
 
-            genai.configure(api_key=self.api_key)
-            return genai.GenerativeModel(self.model)
+            return genai.Client(api_key=self.api_key)
 
         raise ValueError(f"Unsupported provider: {self.provider}")
 
@@ -88,7 +90,18 @@ class LLMPlayer(PlayerAdapter):
         )
 
         for _attempt in range(self.max_retries):
-            api_result = self._call_api(SYSTEM_PROMPT, user_msg)
+            try:
+                api_result = self._call_api(SYSTEM_PROMPT, user_msg)
+            except Exception:
+                logger.warning(
+                    "%s: API call failed (attempt %d/%d)",
+                    self.name,
+                    _attempt + 1,
+                    self.max_retries,
+                    exc_info=True,
+                )
+                illegal_attempts += 1
+                continue
             total_tokens += api_result.tokens
             total_cost += api_result.cost_usd
 
@@ -158,7 +171,7 @@ class LLMPlayer(PlayerAdapter):
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                max_tokens=self.max_tokens,
+                max_completion_tokens=self.max_tokens,
                 temperature=self.temperature,
             )
             text = response.choices[0].message.content or ""
@@ -182,16 +195,21 @@ class LLMPlayer(PlayerAdapter):
             return _ApiResult(text=text, tokens=tokens, cost_usd=cost)
 
         if self.provider == "google":
-            response = self._client.generate_content(
-                f"{system}\n\n{user}",
-                generation_config={
-                    "max_output_tokens": self.max_tokens,
-                    "temperature": self.temperature,
-                },
+            from google.genai import types
+
+            response = self._client.models.generate_content(
+                model=self.model,
+                contents=f"{system}\n\n{user}",
+                config=types.GenerateContentConfig(
+                    max_output_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                ),
             )
             text = getattr(response, "text", "") or ""
             usage = getattr(response, "usage_metadata", None)
-            tokens = getattr(usage, "total_token_count", 0) if usage else 0
+            prompt_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
+            candidates_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
+            tokens = prompt_tokens + candidates_tokens
             return _ApiResult(text=text, tokens=tokens, cost_usd=0.0)
 
         raise ValueError(f"Unsupported provider: {self.provider}")
@@ -200,6 +218,7 @@ class LLMPlayer(PlayerAdapter):
         pricing = {
             "gpt-4o": (2.50, 10.00),
             "gpt-4o-mini": (0.15, 0.60),
+            "gpt-5.2": (2.00, 8.00),
             "o4-mini": (1.10, 4.40),
             "gpt-3.5-turbo-instruct": (1.50, 2.00),
         }
