@@ -1,14 +1,14 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- Root contains high-level docs: `SYSTEM_DESIGN.md`, `README.md`, `AGENTS.md`, and `CLAUDE.md`.
+- Root contains high-level docs plus deploy/dev setup files: `SYSTEM_DESIGN.md`, `README.md`, `AGENTS.md`, `CLAUDE.md`, `.env.example`, and `docker-compose.yml`.
 - Backend code is in `backend/` (FastAPI + SQLModel + python-chess).
 - Frontend code is in `frontend/` (Next.js App Router + TypeScript + Tailwind CSS v4).
 
 ### Backend
 - Runtime source is in `backend/src/`:
   - `api/`: FastAPI routes and API response/request models
-  - `game/`: orchestration, tournament manager, player factory, Elo updates
+  - `game/`: orchestration, tournament manager, player factory, Elo updates, and opening detection (`openings.py`)
   - `players/`: LLM and UCI engine adapters
   - `analysis/`: Stockfish move evaluation and accuracy/CPL classification
   - `db/`: SQLModel entities and DB session/init helpers
@@ -28,10 +28,15 @@
   - `hooks/`: live tournament state and WebSocket lifecycle
   - `lib/`: typed API client and shared TypeScript interfaces
 - Config:
-  - `frontend/next.config.ts` rewrites `/api/*` and `/health` to backend localhost by default.
+  - `frontend/next.config.ts` rewrites `/api/*` and `/health` using `BACKEND_URL` (default `http://localhost:8000`).
+  - Browser-side API/WS targets come from `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_WS_URL`.
 
 ## Build, Test, and Development Commands
 Run commands from the relevant subdirectory.
+
+### Full stack (`/`)
+- `cp .env.example .env` seeds Docker env for backend container keys/settings.
+- `docker compose up --build` runs backend (`:8000`) and frontend (`:3000`) together.
 
 ### Backend (`backend/`)
 - `uv sync` installs dependencies from `pyproject.toml`.
@@ -81,10 +86,15 @@ Run commands from the relevant subdirectory.
   - API request/response examples for contract changes
 
 ## Security & Configuration Tips
+- Docker env setup (repo root):
+  - `cp .env.example .env`
 - Backend env setup:
   - `cp backend/.env.example backend/.env`
-  - configure `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, and `STOCKFISH_PATH`
+  - configure `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `STOCKFISH_PATH`
+  - tune runtime via `DATABASE_URL`, `ANALYSIS_DEPTH`, `STOCKFISH_THREADS`, `STOCKFISH_HASH_MB`, `MOVE_DELAY_SECONDS`, `MAX_MOVES_PER_SIDE`, `LLM_MAX_RETRIES`, `LLM_TEMPERATURE`
+  - optional: set `PLAYERS` as a JSON array to override the default tournament roster in `backend/src/config.py`
 - Frontend optional env vars:
+  - `BACKEND_URL` (used by Next.js rewrites in `next.config.ts`)
   - `NEXT_PUBLIC_API_URL` (REST base URL)
   - `NEXT_PUBLIC_WS_URL` (live WebSocket URL)
 - Never commit secrets or local env files.
