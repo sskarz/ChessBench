@@ -211,10 +211,16 @@ export interface TournamentQueuedEvent {
   run_id: string;
 }
 
+export interface TournamentResumedEvent {
+  type: "tournament_resumed";
+  run_id: string;
+}
+
 export type WSEvent =
   | GameStartEvent
   | MoveEvent
   | GameEndEvent
   | TournamentCompleteEvent
   | TournamentErrorEvent
-  | TournamentQueuedEvent;
+  | TournamentQueuedEvent
+  | TournamentResumedEvent;

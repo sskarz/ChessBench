@@ -27,25 +27,27 @@ class Game(SQLModel, table=True):
     tournament_id: int | None = Field(default=None, foreign_key="tournament.id")
     white_id: int = Field(foreign_key="player.id")
     black_id: int = Field(foreign_key="player.id")
-    result: str
-    termination: str
-    pgn: str
-    moves_count: int
-    white_avg_cpl: float
-    black_avg_cpl: float
-    white_accuracy: float
-    black_accuracy: float
-    white_blunders: int
-    black_blunders: int
-    white_mistakes: int
-    black_mistakes: int
-    white_illegal_attempts: int
-    black_illegal_attempts: int
-    white_tokens: int
-    black_tokens: int
-    white_cost_usd: float
-    black_cost_usd: float
-    duration_seconds: float
+    status: str = Field(default="in_progress")
+    pairing_index: int | None = Field(default=None)
+    result: str = Field(default="*")
+    termination: str = Field(default="")
+    pgn: str = Field(default="")
+    moves_count: int = Field(default=0)
+    white_avg_cpl: float = Field(default=0.0)
+    black_avg_cpl: float = Field(default=0.0)
+    white_accuracy: float = Field(default=0.0)
+    black_accuracy: float = Field(default=0.0)
+    white_blunders: int = Field(default=0)
+    black_blunders: int = Field(default=0)
+    white_mistakes: int = Field(default=0)
+    black_mistakes: int = Field(default=0)
+    white_illegal_attempts: int = Field(default=0)
+    black_illegal_attempts: int = Field(default=0)
+    white_tokens: int = Field(default=0)
+    black_tokens: int = Field(default=0)
+    white_cost_usd: float = Field(default=0.0)
+    black_cost_usd: float = Field(default=0.0)
+    duration_seconds: float = Field(default=0.0)
     opening_name: str | None = None
     opening_eco: str | None = None
     started_at: datetime = Field(default_factory=datetime.utcnow)
@@ -79,4 +81,7 @@ class Tournament(SQLModel, table=True):
     format: str
     rounds: int
     status: str = Field(default="pending")
+    player_names_json: str = Field(default="[]")
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    completed_at: datetime | None = None
+    error_message: str | None = None

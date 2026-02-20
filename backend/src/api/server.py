@@ -30,7 +30,7 @@ from src.api.models import (
     TournamentStartResponse,
 )
 from src.config import settings
-from src.db.models import Game, MoveAnalysis, Player
+from src.db.models import Game, MoveAnalysis, Player, Tournament
 from src.db.session import engine, get_session, init_db
 from src.game.orchestrator import GameConfig, GameOrchestrator
 from src.game.player_factory import build_players_from_settings, describe_player_config
@@ -117,7 +117,10 @@ def _standings_from_db(session: Session) -> list[StandingsEntry]:
 
     for player in players:
         games = session.exec(
-            select(Game).where(or_(Game.white_id == player.id, Game.black_id == player.id))
+            select(Game).where(
+                or_(Game.white_id == player.id, Game.black_id == player.id),
+                Game.status == "completed",
+            )
         ).all()
         blunders = sum(
             game.white_blunders if game.white_id == player.id else game.black_blunders
@@ -190,12 +193,11 @@ def _live_response() -> LiveStateResponse:
     )
 
 
-async def _run_tournament(
-    run_id: str,
-    rounds: int,
+def _build_orchestrator_and_manager(
     players: list[PlayerAdapter],
     descriptors: dict[str, dict[str, str]],
-) -> None:
+    rounds: int,
+) -> tuple[StockfishAnalyzer, TournamentManager]:
     analyzer = StockfishAnalyzer(
         engine_path=settings.stockfish_path,
         depth=settings.analysis_depth,
@@ -221,6 +223,17 @@ async def _run_tournament(
         player_descriptors=descriptors,
     )
 
+    return analyzer, manager
+
+
+async def _run_tournament(
+    run_id: str,
+    rounds: int,
+    players: list[PlayerAdapter],
+    descriptors: dict[str, dict[str, str]],
+) -> None:
+    analyzer, manager = _build_orchestrator_and_manager(players, descriptors, rounds)
+
     try:
         summary = await manager.run_round_robin(rounds=rounds)
         runtime.live.status = "completed"
@@ -244,6 +257,45 @@ async def _run_tournament(
         }
         await runtime.manager.broadcast(runtime.live.last_event)
         logger.exception("Tournament run failed")
+    finally:
+        runtime.live.updated_at = _now()
+        runtime.tournament_task = None
+        manager.cleanup_players(players)
+        analyzer.shutdown()
+
+
+async def _resume_tournament(
+    run_id: str,
+    tournament_id: int,
+    players: list[PlayerAdapter],
+    descriptors: dict[str, dict[str, str]],
+    rounds: int,
+) -> None:
+    analyzer, manager = _build_orchestrator_and_manager(players, descriptors, rounds)
+
+    try:
+        summary = await manager.resume_round_robin(tournament_id=tournament_id)
+        runtime.live.status = "completed"
+        runtime.live.latest_standings = summary.get("standings", [])
+        runtime.live.current_game = None
+        runtime.live.last_event = {
+            "type": "tournament_complete",
+            "run_id": run_id,
+            "games_played": summary.get("games_played", 0),
+            "standings": summary.get("standings", []),
+        }
+        await runtime.manager.broadcast(runtime.live.last_event)
+    except Exception as exc:
+        runtime.live.status = "error"
+        runtime.live.error = str(exc)
+        runtime.live.current_game = None
+        runtime.live.last_event = {
+            "type": "tournament_error",
+            "run_id": run_id,
+            "error": str(exc),
+        }
+        await runtime.manager.broadcast(runtime.live.last_event)
+        logger.exception("Tournament resume failed")
     finally:
         runtime.live.updated_at = _now()
         runtime.tournament_task = None
@@ -315,6 +367,71 @@ async def start_tournament(payload: TournamentStartRequest) -> TournamentStartRe
     )
 
 
+@app.post("/api/tournament/resume", response_model=TournamentStartResponse, status_code=status.HTTP_202_ACCEPTED)
+async def resume_tournament(session: Session = Depends(get_session)) -> TournamentStartResponse:
+    if runtime.tournament_task and not runtime.tournament_task.done():
+        raise HTTPException(status_code=409, detail="Tournament is already running")
+
+    # Find the most recent resumable tournament
+    tournament = session.exec(
+        select(Tournament)
+        .where(Tournament.status.in_(["running", "error"]))
+        .order_by(Tournament.id.desc())
+    ).first()
+
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="No resumable tournament found")
+
+    stored_names: list[str] = json.loads(tournament.player_names_json)
+    if not stored_names:
+        raise HTTPException(status_code=400, detail="Tournament has no stored player roster")
+
+    players, player_errors = build_players_from_settings(settings)
+    available_names = {p.get_name() for p in players}
+
+    missing = [name for name in stored_names if name not in available_names]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tournament players not available: {', '.join(missing)}",
+        )
+
+    # Reorder players to match stored order
+    player_map = {p.get_name(): p for p in players}
+    ordered_players = [player_map[name] for name in stored_names]
+
+    run_id = uuid4().hex[:10]
+    runtime.live = LiveState(
+        status="running",
+        run_id=run_id,
+        current_game=None,
+        last_event={"type": "tournament_queued", "run_id": run_id},
+        latest_standings=[],
+        started_at=_now(),
+        updated_at=_now(),
+        error=None,
+    )
+
+    player_configs = [describe_player_config(player) for player in ordered_players]
+
+    runtime.tournament_task = asyncio.create_task(
+        _resume_tournament(
+            run_id=run_id,
+            tournament_id=tournament.id,
+            players=ordered_players,
+            descriptors={row["name"]: row for row in player_configs},
+            rounds=tournament.rounds,
+        )
+    )
+
+    return TournamentStartResponse(
+        status="accepted",
+        run_id=run_id,
+        rounds=tournament.rounds,
+        players=player_configs,
+    )
+
+
 @app.get("/api/standings", response_model=list[StandingsEntry])
 async def get_standings(session: Session = Depends(get_session)) -> list[StandingsEntry]:
     return _standings_from_db(session)
@@ -325,8 +442,16 @@ async def list_games(limit: int = 20, offset: int = 0, session: Session = Depend
     safe_limit = max(1, min(limit, 200))
     safe_offset = max(0, offset)
 
-    total = session.exec(select(func.count(Game.id))).one() or 0
-    games = session.exec(select(Game).order_by(Game.id.desc()).offset(safe_offset).limit(safe_limit)).all()
+    total = session.exec(
+        select(func.count(Game.id)).where(Game.status == "completed")
+    ).one() or 0
+    games = session.exec(
+        select(Game)
+        .where(Game.status == "completed")
+        .order_by(Game.id.desc())
+        .offset(safe_offset)
+        .limit(safe_limit)
+    ).all()
     names = _player_name_map(session, games)
 
     items = [
@@ -426,7 +551,10 @@ async def get_player_stats(player_name: str, session: Session = Depends(get_sess
         raise HTTPException(status_code=404, detail="Player not found")
 
     games = session.exec(
-        select(Game).where(or_(Game.white_id == player.id, Game.black_id == player.id))
+        select(Game).where(
+            or_(Game.white_id == player.id, Game.black_id == player.id),
+            Game.status == "completed",
+        )
     ).all()
     blunders = sum(
         game.white_blunders if game.white_id == player.id else game.black_blunders
@@ -460,7 +588,10 @@ async def get_player_accuracy_distribution(
         raise HTTPException(status_code=404, detail="Player not found")
 
     games = session.exec(
-        select(Game).where(or_(Game.white_id == player.id, Game.black_id == player.id))
+        select(Game).where(
+            or_(Game.white_id == player.id, Game.black_id == player.id),
+            Game.status == "completed",
+        )
     ).all()
 
     if not games:

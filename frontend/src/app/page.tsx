@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { useGameState } from "@/hooks/useGameState";
-import { startTournament } from "@/lib/api";
+import { startTournament, resumeTournament } from "@/lib/api";
 import Navigation from "@/components/Navigation";
 import LiveBoard from "@/components/LiveBoard";
 import EvalBar from "@/components/EvalBar";
@@ -29,10 +29,12 @@ export default function Home() {
   } = useGameState();
 
   const [isStarting, setIsStarting] = useState(false);
+  const [isResuming, setIsResuming] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
   const tournamentBusy =
     isStarting ||
+    isResuming ||
     tournamentStatus === "running" ||
     tournamentStatus === "queued";
 
@@ -45,6 +47,18 @@ export default function Home() {
       setStartError(err instanceof Error ? err.message : "Failed to start tournament");
     } finally {
       setIsStarting(false);
+    }
+  }
+
+  async function handleResumeTournament() {
+    setIsResuming(true);
+    setStartError(null);
+    try {
+      await resumeTournament();
+    } catch (err) {
+      setStartError(err instanceof Error ? err.message : "Failed to resume tournament");
+    } finally {
+      setIsResuming(false);
     }
   }
 
@@ -175,20 +189,38 @@ export default function Home() {
                   <p className="font-[family-name:var(--font-display)] text-lg font-semibold text-secondary">
                     No active game
                   </p>
-                  <button
-                    onClick={handleStartTournament}
-                    disabled={tournamentBusy}
-                    className="mt-4 rounded-lg bg-accent px-6 py-2.5 font-[family-name:var(--font-display)] text-sm font-semibold text-white transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {tournamentBusy ? (
-                      <span className="flex items-center gap-2">
-                        <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                        Tournament in Progress...
-                      </span>
-                    ) : (
-                      "Start Tournament"
+                  <div className="mt-4 flex gap-3">
+                    <button
+                      onClick={handleStartTournament}
+                      disabled={tournamentBusy}
+                      className="rounded-lg bg-accent px-6 py-2.5 font-[family-name:var(--font-display)] text-sm font-semibold text-white transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isStarting ? (
+                        <span className="flex items-center gap-2">
+                          <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                          Starting...
+                        </span>
+                      ) : (
+                        "Start Tournament"
+                      )}
+                    </button>
+                    {(tournamentStatus === "idle" || tournamentStatus === "error" || tournamentStatus === "completed") && (
+                      <button
+                        onClick={handleResumeTournament}
+                        disabled={tournamentBusy}
+                        className="rounded-lg border border-accent px-6 py-2.5 font-[family-name:var(--font-display)] text-sm font-semibold text-accent transition-all hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {isResuming ? (
+                          <span className="flex items-center gap-2">
+                            <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-accent/30 border-t-accent" />
+                            Resuming...
+                          </span>
+                        ) : (
+                          "Resume Tournament"
+                        )}
+                      </button>
                     )}
-                  </button>
+                  </div>
                   {startError && (
                     <p className="mt-2 text-xs text-[var(--clr-blunder)]">
                       {startError}

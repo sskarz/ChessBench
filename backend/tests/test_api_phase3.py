@@ -54,6 +54,7 @@ def _seed_data(engine) -> None:
             id=1,
             white_id=alpha.id,
             black_id=beta.id,
+            status="completed",
             result="1-0",
             termination="checkmate",
             pgn="1. e4 e5 2. Qh5 Nc6 3. Bc4 Nf6 4. Qxf7#",

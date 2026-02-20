@@ -75,3 +75,19 @@ export async function startTournament(
   }
   return res.json() as Promise<TournamentStartResponse>;
 }
+
+export async function resumeTournament(): Promise<TournamentStartResponse> {
+  const res = await fetch(`${BASE_URL}/api/tournament/resume`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const msg =
+      res.status === 409
+        ? "Tournament already running"
+        : res.status === 404
+          ? "No resumable tournament found"
+          : `API ${res.status}: ${res.statusText}`;
+    throw new Error(msg);
+  }
+  return res.json() as Promise<TournamentStartResponse>;
+}

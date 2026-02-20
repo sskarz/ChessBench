@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Awaitable, Callable
 
@@ -40,6 +40,22 @@ class LiveMoveEvent:
 
 
 @dataclass
+class ResumeState:
+    """State needed to resume a game from a partially-played position."""
+    moves_uci: list[str] = field(default_factory=list)
+    white_cpls: list[int] = field(default_factory=list)
+    black_cpls: list[int] = field(default_factory=list)
+    white_illegals: int = 0
+    black_illegals: int = 0
+    white_tokens: int = 0
+    black_tokens: int = 0
+    white_cost: float = 0.0
+    black_cost: float = 0.0
+    start_time_original: float = 0.0
+    analysis_records: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
 class GameConfig:
     max_moves: int = 150
     analyze_depth: int = 18
@@ -47,6 +63,7 @@ class GameConfig:
 
 
 EventCallback = Callable[[LiveMoveEvent], Awaitable[None]]
+MoveRecordCallback = Callable[[int, dict[str, Any]], Awaitable[None]]
 
 
 class GameOrchestrator:
@@ -59,8 +76,15 @@ class GameOrchestrator:
         self.analyzer = analyzer
         self.event_callback = event_callback
         self.config = config or GameConfig()
+        self.on_move_recorded: MoveRecordCallback | None = None
 
-    async def play_game(self, game_id: int, white: PlayerAdapter, black: PlayerAdapter) -> dict[str, Any]:
+    async def play_game(
+        self,
+        game_id: int,
+        white: PlayerAdapter,
+        black: PlayerAdapter,
+        resume: ResumeState | None = None,
+    ) -> dict[str, Any]:
         board = chess.Board()
         game = chess.pgn.Game()
         game.headers["White"] = white.get_name()
@@ -84,6 +108,25 @@ class GameOrchestrator:
         game_history: list[chess.Move] = []
 
         start_time = time.time()
+
+        # Restore state from resume if provided
+        if resume is not None:
+            for uci_str in resume.moves_uci:
+                move = chess.Move.from_uci(uci_str)
+                node = node.add_variation(move)
+                board.push(move)
+                game_history.append(move)
+            white_cpls = list(resume.white_cpls)
+            black_cpls = list(resume.black_cpls)
+            white_illegals = resume.white_illegals
+            black_illegals = resume.black_illegals
+            white_tokens = resume.white_tokens
+            black_tokens = resume.black_tokens
+            white_cost = resume.white_cost
+            black_cost = resume.black_cost
+            move_analyses = list(resume.analysis_records)
+            if resume.start_time_original > 0:
+                start_time = resume.start_time_original
 
         while not board.is_game_over(claim_draw=True):
             if board.fullmove_number > self.config.max_moves:
@@ -184,6 +227,12 @@ class GameOrchestrator:
                 "illegal_attempts": result.illegal_attempts,
             }
             move_analyses.append(analysis_record)
+
+            if self.on_move_recorded:
+                try:
+                    await self.on_move_recorded(game_id, analysis_record)
+                except Exception:
+                    logger.warning("on_move_recorded callback failed for game %d", game_id, exc_info=True)
 
             if self.event_callback:
                 event = LiveMoveEvent(
