@@ -198,9 +198,7 @@ class GameOrchestrator:
                     best_move_san=move_eval.best_move_san,
                     cpl=move_eval.centipawn_loss,
                     classification=move_eval.classification,
-                    win_pct_white=(
-                        move_eval.win_pct_after if board.turn == chess.BLACK else 100 - move_eval.win_pct_after
-                    ),
+                    win_pct_white=move_eval.win_pct_after,
                     accuracy=self.analyzer.move_accuracy(move_eval.centipawn_loss),
                     think_time_ms=result.think_time_ms,
                     illegal_attempts=result.illegal_attempts,

@@ -82,6 +82,8 @@ async def test_orchestrator_runs_and_returns_expected_shape() -> None:
     assert len(result["move_analyses"]) == 2
     assert "1." in result["pgn"]
     assert len(events) == 2
+    assert [event.eval_cp for event in events] == [8, 8]
+    assert [event.win_pct_white for event in events] == [49.0, 49.0]
 
 
 @pytest.mark.asyncio
