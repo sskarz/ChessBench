@@ -22,7 +22,7 @@ export default function PlayerCard({
   thinkTimeMs,
 }: PlayerCardProps) {
   const borderColor = color === "white" ? "border-[#e8e6e3]" : "border-[#555]";
-  const pieceIcon = color === "white" ? "♔" : "♚";
+  const pieceIcon = color === "white" ? "♚" : "♔";
 
   return (
     <motion.div
