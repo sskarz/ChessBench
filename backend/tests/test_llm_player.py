@@ -109,7 +109,10 @@ class _GoogleStubPlayer(LLMPlayer):
 def _install_fake_google_genai(monkeypatch) -> None:
     google_module = ModuleType("google")
     genai_module = ModuleType("google.genai")
-    genai_module.types = SimpleNamespace(GenerateContentConfig=lambda **kwargs: kwargs)
+    genai_module.types = SimpleNamespace(
+        GenerateContentConfig=lambda **kwargs: kwargs,
+        ThinkingConfig=lambda **kwargs: kwargs,
+    )
     google_module.genai = genai_module
     monkeypatch.setitem(sys.modules, "google", google_module)
     monkeypatch.setitem(sys.modules, "google.genai", genai_module)

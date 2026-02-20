@@ -212,8 +212,9 @@ class LLMPlayer(PlayerAdapter):
                 model=self.model,
                 contents=f"{system}\n\n{user}",
                 config=types.GenerateContentConfig(
-                    max_output_tokens=self.max_tokens,
+                    max_output_tokens=128,
                     temperature=self.temperature,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
                 ),
             )
             text = getattr(response, "text", "") or ""
