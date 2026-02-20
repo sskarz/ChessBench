@@ -24,6 +24,9 @@ export const metadata: Metadata = {
   title: "LLM Chess Arena",
   description:
     "Watch AI models battle on the chessboard. Live analysis, Elo ratings, and move-by-move accuracy.",
+  icons: {
+    icon: "/logo.png",
+  },
 };
 
 export default function RootLayout({

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import sys
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import chess
+import pytest
 
 from src.players.llm_player import LLMPlayer, _ApiResult
 
@@ -13,8 +13,8 @@ class StubLLMPlayer(LLMPlayer):
         self._responses = responses
         super().__init__(
             name="stub",
-            provider="openai",
-            model="gpt-4o",
+            provider="openrouter",
+            model="openai/gpt-4o",
             api_key="test-key",
             max_retries=max_retries,
             temperature=0.0,
@@ -29,6 +29,95 @@ class StubLLMPlayer(LLMPlayer):
         if self._responses:
             return self._responses.pop(0)
         return _ApiResult(text="e2e4", tokens=1, cost_usd=0.0)
+
+
+class _FakeChatCompletions:
+    def __init__(self, response: object) -> None:
+        self._response = response
+
+    def create(self, **kwargs) -> object:
+        _ = kwargs
+        return self._response
+
+
+class _QueuedFakeChatCompletions:
+    def __init__(self, responses: list[object]) -> None:
+        self._responses = responses
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs) -> object:
+        self.calls.append(kwargs)
+        if self._responses:
+            return self._responses.pop(0)
+        raise RuntimeError("No queued response available")
+
+
+class _FakeChat:
+    def __init__(self, response: object) -> None:
+        self.completions = _FakeChatCompletions(response)
+
+
+class _QueuedFakeChat:
+    def __init__(self, responses: list[object]) -> None:
+        self.completions = _QueuedFakeChatCompletions(responses)
+
+
+class _FakeOpenAIClient:
+    def __init__(self, response: object) -> None:
+        self.chat = _FakeChat(response)
+
+
+class _QueuedFakeOpenAIClient:
+    def __init__(self, responses: list[object]) -> None:
+        self.chat = _QueuedFakeChat(responses)
+
+
+class _OpenRouterStubPlayer(LLMPlayer):
+    def __init__(self, response: object) -> None:
+        self._response = response
+        super().__init__(
+            name="openrouter-stub",
+            provider="openrouter",
+            model="openai/gpt-4o",
+            api_key="test-key",
+            max_retries=2,
+            temperature=0.0,
+            max_tokens=16,
+        )
+
+    def _init_client(self):
+        return _FakeOpenAIClient(self._response)
+
+
+class _QueuedOpenRouterStubPlayer(LLMPlayer):
+    def __init__(
+        self,
+        responses: list[object],
+        max_tokens: int = 16,
+        reasoning_effort: str | None = None,
+    ) -> None:
+        self._responses = responses
+        super().__init__(
+            name="openrouter-stub",
+            provider="openrouter",
+            model="openai/gpt-5.2",
+            api_key="test-key",
+            max_retries=2,
+            temperature=0.0,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+        )
+
+    def _init_client(self):
+        return _QueuedFakeOpenAIClient(self._responses)
+
+
+def _make_response(*, text: str = "e2e4", usage: object | None = None, model_extra: dict | None = None):
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=text))],
+        usage=usage,
+        model_extra=model_extra or {},
+    )
 
 
 def test_llm_player_retries_then_accepts_uci() -> None:
@@ -59,6 +148,19 @@ def test_llm_player_accepts_san_output() -> None:
     assert result.illegal_attempts == 0
 
 
+def test_llm_player_extracts_uci_from_verbose_response() -> None:
+    board = chess.Board()
+    player = StubLLMPlayer(
+        responses=[_ApiResult(text="Best move is e2e4 because it controls the center.", tokens=3, cost_usd=0.0)],
+        max_retries=2,
+    )
+
+    result = player.get_move(board, [])
+
+    assert result.move == chess.Move.from_uci("e2e4")
+    assert result.illegal_attempts == 0
+
+
 def test_llm_player_fallback_after_retry_exhaustion() -> None:
     board = chess.Board()
     player = StubLLMPlayer(
@@ -75,96 +177,127 @@ def test_llm_player_fallback_after_retry_exhaustion() -> None:
     assert result.illegal_attempts == 2
 
 
-class _FakeGoogleModels:
-    def __init__(self, response: object) -> None:
-        self._response = response
-
-    def generate_content(self, *, model: str, contents: str, config: object) -> object:
-        _ = (model, contents, config)
-        return self._response
-
-
-class _FakeGoogleClient:
-    def __init__(self, response: object) -> None:
-        self.models = _FakeGoogleModels(response)
-
-
-class _GoogleStubPlayer(LLMPlayer):
-    def __init__(self, response: object) -> None:
-        self._response = response
-        super().__init__(
-            name="gemini-stub",
-            provider="google",
-            model="gemini-3.1-pro-preview",
-            api_key="test-key",
-            max_retries=2,
-            temperature=0.0,
-            max_tokens=16,
-        )
-
-    def _init_client(self):
-        return _FakeGoogleClient(self._response)
-
-
-def _install_fake_google_genai(monkeypatch) -> None:
-    google_module = ModuleType("google")
-    genai_module = ModuleType("google.genai")
-    genai_module.types = SimpleNamespace(
-        GenerateContentConfig=lambda **kwargs: kwargs,
-        ThinkingConfig=lambda **kwargs: kwargs,
+def test_llm_player_parses_moves_across_five_ply_game() -> None:
+    board = chess.Board()
+    history: list[chess.Move] = []
+    player = StubLLMPlayer(
+        responses=[
+            _ApiResult(text="e2e4", tokens=1, cost_usd=0.0),
+            _ApiResult(text="Best is e7e5 to mirror center control.", tokens=1, cost_usd=0.0),
+            _ApiResult(text="Nf3", tokens=1, cost_usd=0.0),
+            _ApiResult(text="I'll play Nc6.", tokens=1, cost_usd=0.0),
+            _ApiResult(text="```Bb5```", tokens=1, cost_usd=0.0),
+        ],
+        max_retries=1,
     )
-    google_module.genai = genai_module
-    monkeypatch.setitem(sys.modules, "google", google_module)
-    monkeypatch.setitem(sys.modules, "google.genai", genai_module)
+
+    expected_sans = ["e4", "e5", "Nf3", "Nc6", "Bb5"]
+    parsed_sans: list[str] = []
+
+    for expected_san in expected_sans:
+        result = player.get_move(board, history)
+        assert result.move in board.legal_moves
+        assert result.illegal_attempts == 0
+
+        san = board.san(result.move)
+        parsed_sans.append(san)
+        board.push(result.move)
+        history.append(result.move)
+
+        assert san == expected_san
+
+    assert len(history) == 5
+    assert parsed_sans == expected_sans
 
 
-def test_google_call_handles_none_usage_tokens(monkeypatch) -> None:
-    _install_fake_google_genai(monkeypatch)
-    response = SimpleNamespace(
-        text="e2e4",
-        usage_metadata=SimpleNamespace(prompt_token_count=None, candidates_token_count=None),
+def test_call_api_handles_none_usage_tokens_and_missing_cost() -> None:
+    response = _make_response(
+        usage=SimpleNamespace(total_tokens=None, prompt_tokens=None, completion_tokens=None, model_extra={}),
     )
-    player = _GoogleStubPlayer(response)
+    player = _OpenRouterStubPlayer(response)
 
     result = player._call_api("system", "user")
 
     assert result.text == "e2e4"
     assert result.tokens == 0
+    assert result.cost_usd == 0.0
 
 
-def test_google_call_handles_partial_none_usage_tokens(monkeypatch) -> None:
-    _install_fake_google_genai(monkeypatch)
-    response = SimpleNamespace(
-        text="e2e4",
-        usage_metadata=SimpleNamespace(prompt_token_count=7, candidates_token_count=None),
+def test_call_api_handles_partial_none_usage_tokens() -> None:
+    response = _make_response(
+        usage=SimpleNamespace(total_tokens=None, prompt_tokens=7, completion_tokens=None, model_extra={}),
     )
-    player = _GoogleStubPlayer(response)
+    player = _OpenRouterStubPlayer(response)
 
     result = player._call_api("system", "user")
 
     assert result.tokens == 7
 
 
-def test_google_get_move_works_when_usage_tokens_are_none(monkeypatch) -> None:
-    _install_fake_google_genai(monkeypatch)
-    response = SimpleNamespace(
-        text="e2e4",
-        usage_metadata=SimpleNamespace(prompt_token_count=None, candidates_token_count=None),
+def test_call_api_reads_cost_from_usage_fields() -> None:
+    response = _make_response(
+        usage=SimpleNamespace(
+            total_tokens=10,
+            prompt_tokens=4,
+            completion_tokens=6,
+            model_extra={"cost": "0.00123"},
+        ),
     )
-    player = _GoogleStubPlayer(response)
-    board = chess.Board()
+    player = _OpenRouterStubPlayer(response)
 
-    result = player.get_move(board, [])
+    result = player._call_api("system", "user")
 
-    assert result.move == chess.Move.from_uci("e2e4")
-    assert result.tokens_used == 0
-    assert result.illegal_attempts == 0
+    assert result.tokens == 10
+    assert result.cost_usd == pytest.approx(0.00123)
 
 
-def test_cost_estimation_handles_none_token_fields() -> None:
-    player = StubLLMPlayer(responses=[])
-    openai_usage = SimpleNamespace(prompt_tokens=None, completion_tokens=None)
-    anthropic_usage = SimpleNamespace(input_tokens=None, output_tokens=None)
+def test_call_api_reads_cost_from_response_model_extra() -> None:
+    response = _make_response(
+        usage=SimpleNamespace(total_tokens=10, prompt_tokens=4, completion_tokens=6, model_extra={}),
+        model_extra={"total_cost": "0.0025"},
+    )
+    player = _OpenRouterStubPlayer(response)
 
-    assert player._estimate_cost(openai_usage) == 0.0
-    assert player._estimate_cost_anthropic(anthropic_usage) == 0.0
+    result = player._call_api("system", "user")
+
+    assert result.cost_usd == pytest.approx(0.0025)
+
+
+def test_unsupported_provider_raises() -> None:
+    with pytest.raises(ValueError, match="Unsupported provider"):
+        LLMPlayer(name="bad", provider="openai", model="gpt-4o", api_key="k")
+
+
+def test_call_api_retries_with_larger_budget_when_reasoning_exhausts_tokens() -> None:
+    first = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=""), finish_reason="length")],
+        usage=SimpleNamespace(
+            total_tokens=110,
+            prompt_tokens=94,
+            completion_tokens=16,
+            model_extra={"cost": "0.0003885"},
+        ),
+        model_extra={},
+    )
+    second = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="e2e4"), finish_reason="stop")],
+        usage=SimpleNamespace(
+            total_tokens=126,
+            prompt_tokens=94,
+            completion_tokens=32,
+            model_extra={"cost": "0.0006125"},
+        ),
+        model_extra={},
+    )
+    player = _QueuedOpenRouterStubPlayer([first, second], max_tokens=16, reasoning_effort="low")
+
+    result = player._call_api("system", "user")
+
+    assert result.text == "e2e4"
+    assert result.tokens == 236
+    assert result.cost_usd == pytest.approx(0.001001)
+    assert len(player._client.chat.completions.calls) == 2
+    assert player._client.chat.completions.calls[0]["max_completion_tokens"] == 16
+    assert player._client.chat.completions.calls[1]["max_completion_tokens"] == 1024
+    assert player._client.chat.completions.calls[0]["extra_body"]["reasoning"]["effort"] == "low"
+    assert player._client.chat.completions.calls[1]["extra_body"]["reasoning"]["effort"] == "low"

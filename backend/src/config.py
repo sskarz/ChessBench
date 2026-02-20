@@ -1,17 +1,37 @@
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
 from typing import Any
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _default_stockfish_path() -> str:
+    detected = shutil.which("stockfish")
+    if detected:
+        return detected
+
+    for candidate in ("/opt/homebrew/bin/stockfish", "/usr/local/bin/stockfish"):
+        if Path(candidate).exists():
+            return candidate
+
+    return "/usr/local/bin/stockfish"
+
+
 class Settings(BaseSettings):
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_http_referer: str = ""
+    openrouter_x_title: str = "ChessBench"
+
+    # Deprecated key aliases kept for staged migration.
     openai_api_key: str = ""
     anthropic_api_key: str = ""
     google_api_key: str = ""
 
-    stockfish_path: str = "/usr/local/bin/stockfish"
+    stockfish_path: str = Field(default_factory=_default_stockfish_path)
     analysis_depth: int = 18
     stockfish_threads: int = 4
     stockfish_hash_mb: int = 256
@@ -20,18 +40,24 @@ class Settings(BaseSettings):
     max_moves_per_side: int = 150
     llm_max_retries: int = 5
     llm_temperature: float = 0.0
+    llm_max_tokens: int = 1024
+    llm_reasoning_effort: str = "low"
 
     database_url: str = "sqlite:///./arena.db"
 
     players: list[dict[str, Any]] = Field(
         default_factory=lambda: [
-            {"name": "GPT-5.2", "provider": "openai", "model": "gpt-5.2"},
+            {"name": "GPT-5.2 Pro", "provider": "openrouter", "model": "openai/gpt-5.2-pro"},
             {
-                "name": "Claude Opus",
-                "provider": "anthropic",
-                "model": "claude-opus-4-6",
+                "name": "Claude Opus 4.6",
+                "provider": "openrouter",
+                "model": "anthropic/claude-opus-4.6",
             },
-            {"name": "Gemini 3 Flash", "provider": "google", "model": "gemini-3-flash-preview"},
+            {
+                "name": "Gemini 3.1 Pro Preview",
+                "provider": "openrouter",
+                "model": "google/gemini-3.1-pro-preview",
+            },
             {
                 "name": "Stockfish-800",
                 "provider": "engine",

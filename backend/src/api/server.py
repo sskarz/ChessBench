@@ -330,10 +330,29 @@ async def start_tournament(payload: TournamentStartRequest) -> TournamentStartRe
         raise HTTPException(status_code=409, detail="Tournament is already running")
 
     players, player_errors = build_players_from_settings(settings)
+    if player_errors:
+        logger.error(
+            "Refusing tournament start because some players failed to initialize "
+            "(initialized=%d configured=%d stockfish_path=%s errors=%s)",
+            len(players),
+            len(settings.players),
+            settings.stockfish_path,
+            player_errors,
+        )
+        detail = {
+            "message": "One or more configured players failed to initialize",
+            "errors": player_errors,
+            "configured_players": len(settings.players),
+            "initialized_players": len(players),
+        }
+        raise HTTPException(status_code=400, detail=detail)
+
     if len(players) < 2:
         detail = {
             "message": "Need at least 2 valid players to start tournament",
             "errors": player_errors,
+            "configured_players": len(settings.players),
+            "initialized_players": len(players),
         }
         raise HTTPException(status_code=400, detail=detail)
 
@@ -387,6 +406,23 @@ async def resume_tournament(session: Session = Depends(get_session)) -> Tourname
         raise HTTPException(status_code=400, detail="Tournament has no stored player roster")
 
     players, player_errors = build_players_from_settings(settings)
+    if player_errors:
+        logger.error(
+            "Refusing tournament resume because some players failed to initialize "
+            "(initialized=%d configured=%d stockfish_path=%s errors=%s)",
+            len(players),
+            len(settings.players),
+            settings.stockfish_path,
+            player_errors,
+        )
+        detail = {
+            "message": "One or more configured players failed to initialize",
+            "errors": player_errors,
+            "configured_players": len(settings.players),
+            "initialized_players": len(players),
+        }
+        raise HTTPException(status_code=400, detail=detail)
+
     available_names = {p.get_name() for p in players}
 
     missing = [name for name in stored_names if name not in available_names]

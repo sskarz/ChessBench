@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Generator
@@ -9,7 +10,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from src.api import server
 from src.api.server import LiveState, app
-from src.db.models import Game, MoveAnalysis, Player
+from src.db.models import Game, MoveAnalysis, Player, Tournament
 from src.db.session import get_session
 from src.players.base import MoveResult, PlayerAdapter
 
@@ -121,6 +122,38 @@ def _client_with_seeded_db(tmp_path: Path) -> Generator[TestClient, None, None]:
     server.runtime.tournament_task = None
 
 
+def _client_with_resumable_tournament(
+    tmp_path: Path, player_names: list[str]
+) -> Generator[TestClient, None, None]:
+    engine = _build_test_engine(tmp_path / "resume.db")
+
+    with Session(engine) as session:
+        tournament = Tournament(
+            name="Round Robin Test",
+            format="round_robin",
+            rounds=1,
+            status="error",
+            player_names_json=json.dumps(player_names),
+        )
+        session.add(tournament)
+        session.commit()
+
+    def _override_get_session() -> Generator[Session, None, None]:
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _override_get_session
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.tournament_task = None
+
+    with TestClient(app) as client:
+        yield client
+
+    app.dependency_overrides.clear()
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.tournament_task = None
+
+
 def test_api_read_endpoints(tmp_path: Path) -> None:
     for client in _client_with_seeded_db(tmp_path):
         standings = client.get("/api/standings")
@@ -197,3 +230,43 @@ def test_tournament_start_endpoint_accept_and_conflict(monkeypatch) -> None:
 
     server.runtime.live = LiveState(updated_at=datetime.utcnow())
     server.runtime.tournament_task = None
+
+
+def test_tournament_start_endpoint_rejects_partial_roster(monkeypatch) -> None:
+    monkeypatch.setattr(server, "init_db", lambda: None)
+
+    players = [DummyPlayer("A"), DummyPlayer("B"), DummyPlayer("C")]
+    errors = ["Failed to build engine player 'Stockfish-800' (engine_path=/bad/path): missing binary"]
+    monkeypatch.setattr(server, "build_players_from_settings", lambda _settings: (players, errors))
+
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.tournament_task = None
+
+    with TestClient(app) as client:
+        response = client.post("/api/tournament/start", json={"rounds": 1})
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["message"] == "One or more configured players failed to initialize"
+        assert detail["errors"] == errors
+        assert detail["configured_players"] >= 3
+        assert detail["initialized_players"] == 3
+
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.tournament_task = None
+
+
+def test_tournament_resume_endpoint_rejects_partial_roster(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(server, "init_db", lambda: None)
+
+    players = [DummyPlayer("A"), DummyPlayer("B"), DummyPlayer("C")]
+    errors = ["Failed to build engine player 'Stockfish-800' (engine_path=/bad/path): missing binary"]
+    monkeypatch.setattr(server, "build_players_from_settings", lambda _settings: (players, errors))
+
+    for client in _client_with_resumable_tournament(tmp_path, ["A", "B", "C"]):
+        response = client.post("/api/tournament/resume")
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["message"] == "One or more configured players failed to initialize"
+        assert detail["errors"] == errors
+        assert detail["configured_players"] >= 3
+        assert detail["initialized_players"] == 3
