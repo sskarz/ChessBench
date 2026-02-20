@@ -31,7 +31,7 @@ class Settings(BaseSettings):
                 "provider": "anthropic",
                 "model": "claude-opus-4-6",
             },
-            {"name": "Gemini 3.1 Pro", "provider": "google", "model": "gemini-3.1-pro-preview"},
+            {"name": "Gemini 3 Flash", "provider": "google", "model": "gemini-3-flash-preview"},
             {
                 "name": "Stockfish-800",
                 "provider": "engine",

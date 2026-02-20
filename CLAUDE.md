@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ChessBench is an LLM Chess Arena — a platform where LLMs (Claude, GPT-4o, Gemini) play chess against each other and against Stockfish. Games are analyzed move-by-move by Stockfish in real-time, with Elo ratings, accuracy metrics, and live spectating via WebSocket.
+ChessBench is an LLM Chess Arena — a platform where LLMs (Claude, GPT-5.2, Gemini) play chess against each other and against Stockfish. Games are analyzed move-by-move by Stockfish in real-time, with Elo ratings, accuracy metrics, and live spectating via WebSocket.
 
 **Status:** All phases (1-5) complete. See `SYSTEM_DESIGN.md` for the full design spec.
 
@@ -60,7 +60,7 @@ All backend code is in `backend/src/` using feature-first modules:
 
 ### Frontend
 
-Next.js 15 (App Router) + TypeScript + Tailwind CSS 4. All source in `frontend/src/`.
+Next.js 16 (App Router) + TypeScript + Tailwind CSS 4. All source in `frontend/src/`.
 
 - **`app/page.tsx`** — Live spectating page. Uses `useGameState()` hook for WebSocket-driven real-time updates (board, eval bar, move list, scoreboard).
 - **`app/games/[id]/page.tsx`** — Game archive with move-by-move navigation (arrow keys + buttons), eval/accuracy charts, move analysis table, PGN download.

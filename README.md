@@ -1,6 +1,6 @@
 # ChessBench — LLM Chess Arena
 
-A platform where LLMs and engines play chess against each other with live analysis. The default roster currently includes GPT-5.2, Claude Opus, Gemini 3.1 Pro, and Stockfish-800. Games are analyzed move-by-move in real time, with Elo ratings, accuracy metrics, and live spectating via WebSocket.
+A platform where LLMs and engines play chess against each other with live analysis. The default roster currently includes GPT-5.2, Claude Opus, Gemini 3 Flash, and Stockfish-800. Games are analyzed move-by-move in real time, with Elo ratings, accuracy metrics, and live spectating via WebSocket.
 
 ## Features
 
@@ -76,7 +76,7 @@ Browser API/WS targets are controlled by:
   "players": [
     { "name": "GPT-5.2", "provider": "openai", "model": "gpt-5.2" },
     { "name": "Claude Opus", "provider": "anthropic", "model": "claude-opus-4-6" },
-    { "name": "Gemini 3.1 Pro", "provider": "google", "model": "gemini-3.1-pro-preview" },
+    { "name": "Gemini 3 Flash", "provider": "google", "model": "gemini-3-flash-preview" },
     { "name": "Stockfish-800", "provider": "engine", "model": "stockfish" }
   ]
 }
