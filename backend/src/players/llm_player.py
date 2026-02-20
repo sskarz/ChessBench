@@ -69,6 +69,15 @@ class LLMPlayer(PlayerAdapter):
 
         raise ValueError(f"Unsupported provider: {self.provider}")
 
+    @staticmethod
+    def _as_int(value: Any) -> int:
+        if value is None:
+            return 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
     def get_name(self) -> str:
         return self.name
 
@@ -176,7 +185,7 @@ class LLMPlayer(PlayerAdapter):
             )
             text = response.choices[0].message.content or ""
             usage = response.usage
-            tokens = usage.total_tokens if usage else 0
+            tokens = self._as_int(getattr(usage, "total_tokens", 0)) if usage else 0
             cost = self._estimate_cost(usage) if usage else 0.0
             return _ApiResult(text=text, tokens=tokens, cost_usd=cost)
 
@@ -190,7 +199,9 @@ class LLMPlayer(PlayerAdapter):
             )
             text = response.content[0].text if response.content else ""
             usage = response.usage
-            tokens = (usage.input_tokens + usage.output_tokens) if usage else 0
+            input_tokens = self._as_int(getattr(usage, "input_tokens", 0)) if usage else 0
+            output_tokens = self._as_int(getattr(usage, "output_tokens", 0)) if usage else 0
+            tokens = input_tokens + output_tokens
             cost = self._estimate_cost_anthropic(usage) if usage else 0.0
             return _ApiResult(text=text, tokens=tokens, cost_usd=cost)
 
@@ -207,8 +218,8 @@ class LLMPlayer(PlayerAdapter):
             )
             text = getattr(response, "text", "") or ""
             usage = getattr(response, "usage_metadata", None)
-            prompt_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
-            candidates_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
+            prompt_tokens = self._as_int(getattr(usage, "prompt_token_count", 0)) if usage else 0
+            candidates_tokens = self._as_int(getattr(usage, "candidates_token_count", 0)) if usage else 0
             tokens = prompt_tokens + candidates_tokens
             return _ApiResult(text=text, tokens=tokens, cost_usd=0.0)
 
@@ -223,8 +234,8 @@ class LLMPlayer(PlayerAdapter):
             "gpt-3.5-turbo-instruct": (1.50, 2.00),
         }
         input_rate, output_rate = pricing.get(self.model, (2.50, 10.00))
-        prompt_tokens = getattr(usage, "prompt_tokens", 0)
-        completion_tokens = getattr(usage, "completion_tokens", 0)
+        prompt_tokens = self._as_int(getattr(usage, "prompt_tokens", 0))
+        completion_tokens = self._as_int(getattr(usage, "completion_tokens", 0))
         input_cost = (prompt_tokens / 1_000_000) * input_rate
         output_cost = (completion_tokens / 1_000_000) * output_rate
         return input_cost + output_cost
@@ -236,6 +247,6 @@ class LLMPlayer(PlayerAdapter):
             "claude-opus-4-6": (15.00, 75.00),
         }
         input_rate, output_rate = pricing.get(self.model, (3.00, 15.00))
-        input_tokens = getattr(usage, "input_tokens", 0)
-        output_tokens = getattr(usage, "output_tokens", 0)
+        input_tokens = self._as_int(getattr(usage, "input_tokens", 0))
+        output_tokens = self._as_int(getattr(usage, "output_tokens", 0))
         return (input_tokens / 1_000_000) * input_rate + (output_tokens / 1_000_000) * output_rate
