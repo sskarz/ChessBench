@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "motion/react";
@@ -23,6 +24,13 @@ export default function Navigation({ wsStatus = "disconnected", gameId }: Naviga
     <nav className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md">
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6">
         <Link href="/" className="flex items-center gap-3 group">
+          <Image
+            src="/logo.png"
+            alt="ChessBench logo"
+            width={32}
+            height={32}
+            className="invert"
+          />
           <span className="font-[family-name:var(--font-display)] text-lg font-bold tracking-tight text-accent">
             LLM Chess Arena
           </span>

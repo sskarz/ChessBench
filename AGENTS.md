@@ -47,7 +47,7 @@ Run commands from the relevant subdirectory.
 - `uv run pytest -q` runs backend tests.
 - `uv run ruff check .` runs lint checks.
 - `uv run python scripts/run_engine_match.py` runs local engine-vs-engine.
-- `uv run python scripts/run_llm_match.py` runs local LLM-vs-LLM (requires API keys).
+- `uv run python scripts/run_llm_match.py` runs local LLM-vs-LLM via OpenRouter (requires `OPENROUTER_API_KEY`; supports `--max-tokens` and `--reasoning-effort`).
 
 ### Frontend (`frontend/`)
 - `npm install` installs dependencies.
@@ -93,10 +93,13 @@ Run commands from the relevant subdirectory.
   - `cp .env.example .env`
 - Backend env setup:
   - `cp backend/.env.example backend/.env`
-  - configure `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `STOCKFISH_PATH`
-  - tune runtime via `DATABASE_URL`, `ANALYSIS_DEPTH`, `STOCKFISH_THREADS`, `STOCKFISH_HASH_MB`, `MOVE_DELAY_SECONDS`, `MAX_MOVES_PER_SIDE`, `LLM_MAX_RETRIES`, `LLM_TEMPERATURE`
-  - optional: set `PLAYERS` as a JSON array to override the default tournament roster in `backend/src/config.py` (current defaults: GPT-5.2, Claude Opus, Gemini 3.1 Pro, Stockfish-800)
+  - configure `OPENROUTER_API_KEY` and `STOCKFISH_PATH`
+  - optional OpenRouter metadata: `OPENROUTER_HTTP_REFERER`, `OPENROUTER_X_TITLE`; optional API target override: `OPENROUTER_BASE_URL`
+  - deprecated fallback aliases are still read during migration: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY` (prefer `OPENROUTER_API_KEY`)
+  - tune runtime via `DATABASE_URL`, `ANALYSIS_DEPTH`, `STOCKFISH_THREADS`, `STOCKFISH_HASH_MB`, `MOVE_DELAY_SECONDS`, `MAX_MOVES_PER_SIDE`, `LLM_MAX_RETRIES`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`, `LLM_REASONING_EFFORT`
+  - optional: set `PLAYERS` as a JSON array to override the default tournament roster in `backend/src/config.py` (current defaults: GPT-5.2, Claude Opus, Gemini 3 Flash, Stockfish-800)
   - `PLAYERS` supports both LLM and engine entries; engine entries can include `engine_path`, `time_limit`, `skill_level`, and `elo_limit`
+  - LLM entries in `PLAYERS` should use `provider: "openrouter"` and OpenRouter model IDs (example: `openai/gpt-5.2`), and can include `reasoning_effort`
 - Frontend optional env vars:
   - `BACKEND_URL` (used by Next.js rewrites in `next.config.ts`)
   - `NEXT_PUBLIC_API_URL` (REST base URL)

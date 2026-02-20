@@ -7,6 +7,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_http_referer: str = ""
+    openrouter_x_title: str = "ChessBench"
+
+    # Deprecated key aliases kept for staged migration.
     openai_api_key: str = ""
     anthropic_api_key: str = ""
     google_api_key: str = ""
@@ -20,18 +26,20 @@ class Settings(BaseSettings):
     max_moves_per_side: int = 150
     llm_max_retries: int = 5
     llm_temperature: float = 0.0
+    llm_max_tokens: int = 128
+    llm_reasoning_effort: str = ""
 
     database_url: str = "sqlite:///./arena.db"
 
     players: list[dict[str, Any]] = Field(
         default_factory=lambda: [
-            {"name": "GPT-5.2", "provider": "openai", "model": "gpt-5.2"},
+            {"name": "GPT-5.2", "provider": "openrouter", "model": "openai/gpt-5.2"},
             {
                 "name": "Claude Opus",
-                "provider": "anthropic",
-                "model": "claude-opus-4-6",
+                "provider": "openrouter",
+                "model": "anthropic/claude-opus-4-6",
             },
-            {"name": "Gemini 3 Flash", "provider": "google", "model": "gemini-3-flash-preview"},
+            {"name": "Gemini 3 Flash", "provider": "openrouter", "model": "google/gemini-3-flash-preview"},
             {
                 "name": "Stockfish-800",
                 "provider": "engine",

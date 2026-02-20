@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ChessBench is an LLM Chess Arena — a platform where LLMs (Claude, GPT-5.2, Gemini) play chess against each other and against Stockfish. Games are analyzed move-by-move by Stockfish in real-time, with Elo ratings, accuracy metrics, and live spectating via WebSocket.
+ChessBench is an LLM Chess Arena — a platform where LLMs (Claude, GPT-5.2, Gemini) play chess against each other and against Stockfish via **OpenRouter** as a unified API gateway. Games are analyzed move-by-move by Stockfish in real-time, with Elo ratings, accuracy metrics, and live spectating via WebSocket.
 
-**Status:** All phases (1-5) complete. See `SYSTEM_DESIGN.md` for the full design spec.
+**Status:** All phases (1-5) complete + OpenRouter integration. See `SYSTEM_DESIGN.md` for the full design spec.
 
 ## Commands
 
@@ -36,6 +36,8 @@ npm run build              # Production build (also serves as type-check)
 3. Open `http://localhost:3000`
 4. Start a tournament: `curl -X POST http://localhost:8000/api/tournament/start -H 'Content-Type: application/json' -d '{"rounds":1}'`
 
+Default players: `openai/gpt-5.2`, `anthropic/claude-opus-4-6`, `google/gemini-3-flash-preview` (all via OpenRouter), and Stockfish-800.
+
 ### Running the full stack (Docker)
 
 ```bash
@@ -51,12 +53,12 @@ Frontend at `http://localhost:3000`, backend API at `http://localhost:8000`.
 
 All backend code is in `backend/src/` using feature-first modules:
 
-- **`players/`** — `PlayerAdapter` ABC (`base.py`) with implementations: `LLMPlayer` (OpenAI/Anthropic/Google) and `UCIEnginePlayer` (Stockfish). Every adapter returns a `MoveResult` dataclass with the move, tokens, cost, think time, and illegal attempt count.
+- **`players/`** — `PlayerAdapter` ABC (`base.py`) with implementations: `LLMPlayer` (all LLMs via OpenRouter's OpenAI-compatible API) and `UCIEnginePlayer` (Stockfish). Every adapter returns a `MoveResult` dataclass with the move, tokens, cost, think time, and illegal attempt count.
 - **`analysis/`** — `StockfishAnalyzer` evaluates each move immediately after it's played. Uses Lichess-style accuracy formula and classifies moves (best/excellent/good/inaccuracy/mistake/blunder) based on centipawn loss.
-- **`game/`** — `GameOrchestrator` runs the core game loop (alternating moves with per-move analysis), emitting `LiveMoveEvent`s for real-time updates. `TournamentManager` handles round-robin scheduling and Elo updates (K=32, start 1200). `PlayerFactory` builds adapters from config. `openings.py` detects ECO openings from PGN via a ~150-entry lookup table (longest match wins).
+- **`game/`** — `GameOrchestrator` runs the core game loop (alternating moves with per-move analysis), emitting `LiveMoveEvent`s for real-time updates. `TournamentManager` handles round-robin scheduling and Elo updates (K=32, start 1200). `PlayerFactory` builds adapters from config (supports `openrouter` and `engine` providers). `openings.py` detects ECO openings from PGN via a ~150-entry lookup table (longest match wins).
 - **`api/`** — FastAPI REST endpoints + WebSocket at `/ws/live`. Response schemas live in `api/models.py`.
 - **`db/`** — SQLModel tables (`Player`, `Game`, `MoveAnalysis`, `Tournament`) with SQLite default. Session factory in `session.py`.
-- **`config.py`** — Pydantic `BaseSettings` loading from `.env`. Contains player roster, Stockfish path, LLM retry/temperature settings, DB URL.
+- **`config.py`** — Pydantic `BaseSettings` loading from `.env`. Contains OpenRouter credentials, player roster, Stockfish path, LLM retry/temperature/max-tokens/reasoning-effort settings, DB URL.
 
 ### Frontend
 
@@ -83,13 +85,25 @@ Next.js 16 (App Router) + TypeScript + Tailwind CSS 4. All source in `frontend/s
 - Persistent SQLite volume at `/app/data/arena.db`
 - Root `.env.example` has Docker-appropriate defaults (`STOCKFISH_PATH=/usr/local/bin/stockfish`)
 
+### Scripts
+
+- **`backend/scripts/run_llm_match.py`** — CLI tool for running ad-hoc LLM vs LLM games outside the tournament system. Uses OpenRouter provider. Run: `uv run python -m scripts.run_llm_match --white-model openai/gpt-4o --black-model anthropic/claude-sonnet-4`
+
+### Branding
+
+- Logo at `frontend/public/logo.png`, referenced as favicon in `layout.tsx` and displayed (with `invert` CSS class) in `Navigation.tsx`
+
 ## Key Design Decisions
 
-- LLMs receive **FEN + legal moves list** (not PGN completion) for structured prompting
+- **OpenRouter as unified LLM gateway** — all LLM calls (OpenAI, Anthropic, Google models) go through OpenRouter's OpenAI-compatible API. This replaces the previous per-provider SDK approach (`openai`, `anthropic`, `google-genai`). Set `OPENROUTER_API_KEY` in `.env`; legacy per-provider keys (`OPENAI_API_KEY`, etc.) are supported as deprecated fallbacks.
+- LLMs receive **FEN + legal moves list** (not PGN completion) for structured prompting; system prompt asks for UCI-format responses
+- **Robust move extraction** — `LLMPlayer._extract_move_from_response()` tries direct UCI/SAN parsing first, then regex-scans the response for UCI and SAN candidates. This handles verbose/chatty model responses gracefully.
 - Illegal move responses trigger retries with SAN/UCI fallback parsing (`llm_max_retries=5`)
+- **Reasoning effort control** — configurable via `LLM_REASONING_EFFORT` env var or per-player `reasoning_effort` field. GPT-5.x models default to `"none"` to avoid reasoning overhead. If a response comes back empty due to `finish_reason=length`, a recovery request is sent with higher `max_tokens` and `reasoning_effort="none"`.
 - Analysis is **per-move in real-time** (not post-game batch), enabling live eval bar updates
 - Primary metric is **centipawn loss (CPL)**; accuracy uses the Lichess formula: `103.1668 * exp(-0.04354 * min(cpl, 1000)) - 3.1668`
 - **ECO opening detection** matches game PGN against a ~150-entry table sorted longest-first; `Game` DB model stores `opening_eco`/`opening_name` (nullable)
+- **Cost extraction from OpenRouter** — `LLMPlayer` extracts cost from multiple possible response locations (usage.cost, usage.total_cost, etc.) to handle varying OpenRouter response formats
 
 ## Coding Conventions
 
@@ -98,7 +112,7 @@ Next.js 16 (App Router) + TypeScript + Tailwind CSS 4. All source in `frontend/s
 - `snake_case` for modules/functions/variables, `PascalCase` for classes, `UPPER_SNAKE_CASE` for constants
 - API schemas in `api/models.py` — no ad-hoc response dicts in handlers
 - Tests use `pytest` + `pytest-asyncio`; test names describe behavior (e.g., `test_start_tournament_rejects_when_running`)
-- Environment: copy `backend/.env.example` to `.env` and set API keys before running (for Docker, use root `.env.example` instead)
+- Environment: copy `backend/.env.example` to `.env` and set `OPENROUTER_API_KEY` before running (for Docker, use root `.env.example` instead). Legacy per-provider keys are deprecated fallbacks.
 
 ### Frontend
 - All pages/components are `"use client"` (no RSC)

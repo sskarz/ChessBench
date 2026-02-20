@@ -3,30 +3,49 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 
 from src.analysis.analyzer import StockfishAnalyzer
 from src.game.orchestrator import GameConfig, GameOrchestrator
 from src.players.llm_player import LLMPlayer
 
-
-def _key_for_provider(provider: str) -> str:
-    mapping = {
-        "openai": "OPENAI_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY",
-        "google": "GOOGLE_API_KEY",
-    }
-    try:
-        return mapping[provider]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported provider: {provider}") from exc
+logger = logging.getLogger(__name__)
 
 
-def _build_llm_player(name: str, provider: str, model: str, retries: int, temperature: float) -> LLMPlayer:
-    key_env = _key_for_provider(provider)
-    api_key = os.getenv(key_env, "")
+def _resolve_openrouter_api_key() -> str:
+    key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    if key:
+        return key
+
+    for deprecated_key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
+        fallback = os.getenv(deprecated_key, "").strip()
+        if not fallback:
+            continue
+        logger.warning(
+            "OPENROUTER_API_KEY is not set. Using deprecated fallback %s; set OPENROUTER_API_KEY instead.",
+            deprecated_key,
+        )
+        return fallback
+
+    return ""
+
+
+def _build_llm_player(
+    name: str,
+    provider: str,
+    model: str,
+    retries: int,
+    temperature: float,
+    max_tokens: int,
+    reasoning_effort: str,
+) -> LLMPlayer:
+    if provider != "openrouter":
+        raise ValueError(f"Unsupported provider: {provider}")
+
+    api_key = _resolve_openrouter_api_key()
     if not api_key:
-        raise RuntimeError(f"Missing API key in env var: {key_env}")
+        raise RuntimeError("Missing API key. Set OPENROUTER_API_KEY.")
 
     return LLMPlayer(
         name=name,
@@ -35,6 +54,11 @@ def _build_llm_player(name: str, provider: str, model: str, retries: int, temper
         api_key=api_key,
         max_retries=retries,
         temperature=temperature,
+        max_tokens=max_tokens,
+        reasoning_effort=reasoning_effort,
+        base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        http_referer=os.getenv("OPENROUTER_HTTP_REFERER", ""),
+        x_title=os.getenv("OPENROUTER_X_TITLE", "ChessBench"),
     )
 
 
@@ -51,6 +75,8 @@ async def _run(args: argparse.Namespace) -> None:
         model=args.white_model,
         retries=args.max_retries,
         temperature=args.temperature,
+        max_tokens=args.max_tokens,
+        reasoning_effort=args.reasoning_effort,
     )
     black = _build_llm_player(
         name=args.black_name,
@@ -58,6 +84,8 @@ async def _run(args: argparse.Namespace) -> None:
         model=args.black_model,
         retries=args.max_retries,
         temperature=args.temperature,
+        max_tokens=args.max_tokens,
+        reasoning_effort=args.reasoning_effort,
     )
 
     orchestrator = GameOrchestrator(
@@ -73,6 +101,7 @@ async def _run(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description="Run LLM vs LLM")
     parser.add_argument("--stockfish-path", default=os.getenv("STOCKFISH_PATH", "/usr/local/bin/stockfish"))
     parser.add_argument("--depth", type=int, default=12)
@@ -82,14 +111,16 @@ def main() -> None:
     parser.add_argument("--move-delay", type=float, default=0.0)
     parser.add_argument("--max-retries", type=int, default=5)
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--max-tokens", type=int, default=int(os.getenv("LLM_MAX_TOKENS", "128")))
+    parser.add_argument("--reasoning-effort", default=os.getenv("LLM_REASONING_EFFORT", ""))
 
-    parser.add_argument("--white-name", default="GPT-4o")
-    parser.add_argument("--white-provider", choices=["openai", "anthropic", "google"], default="openai")
-    parser.add_argument("--white-model", default="gpt-4o")
+    parser.add_argument("--white-name", default="GPT")
+    parser.add_argument("--white-provider", choices=["openrouter"], default="openrouter")
+    parser.add_argument("--white-model", default="openai/gpt-4o")
 
     parser.add_argument("--black-name", default="Claude Sonnet")
-    parser.add_argument("--black-provider", choices=["openai", "anthropic", "google"], default="anthropic")
-    parser.add_argument("--black-model", default="claude-sonnet-4-5-20250929")
+    parser.add_argument("--black-provider", choices=["openrouter"], default="openrouter")
+    parser.add_argument("--black-model", default="anthropic/claude-sonnet-4")
 
     args = parser.parse_args()
     asyncio.run(_run(args))

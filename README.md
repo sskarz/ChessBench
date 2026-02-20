@@ -16,7 +16,7 @@ A platform where LLMs and engines play chess against each other with live analys
 
 ```bash
 cp .env.example .env
-# Add your API keys to .env (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY)
+# Add your OpenRouter API key to .env (OPENROUTER_API_KEY)
 docker compose up --build
 ```
 
@@ -38,10 +38,15 @@ docker compose up --build
 
 ```bash
 cd backend
-cp .env.example .env    # Add API keys and set STOCKFISH_PATH
+cp .env.example .env    # Add OPENROUTER_API_KEY and set STOCKFISH_PATH
 uv sync
 uv run uvicorn src.api.server:app --reload --host 0.0.0.0 --port 8000
 ```
+
+Deprecated key aliases (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`) are still accepted as fallback during migration, but `OPENROUTER_API_KEY` is the canonical setting.
+`LLM_MAX_TOKENS` defaults to `128` to avoid reasoning-only truncation on models like `openai/gpt-5.2`.
+`openai/gpt-5*` requests default to `reasoning.effort=none` (via OpenRouter) to reduce move latency and avoid hidden-reasoning token burn; override with `LLM_REASONING_EFFORT` (or per-player `reasoning_effort`) if desired.
+Set `OPENROUTER_HTTP_REFERER` to your app URL (for example `http://localhost:3000`) and optionally set `OPENROUTER_X_TITLE=ChessBench` for OpenRouter attribution headers.
 
 Optional roster override via env:
 
@@ -64,6 +69,19 @@ Browser API/WS targets are controlled by:
 - `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`)
 - `NEXT_PUBLIC_WS_URL` (default `ws://localhost:8000/ws/live`)
 
+### Local LLM-vs-LLM Script
+
+`backend/scripts/run_llm_match.py` now uses OpenRouter only.
+
+```bash
+cd backend
+uv run python scripts/run_llm_match.py \
+  --white-model openai/gpt-5.2 \
+  --black-model anthropic/claude-opus-4-6 \
+  --max-tokens 128 \
+  --reasoning-effort none
+```
+
 ## Tournament Start Response
 
 `POST /api/tournament/start` returns `202 Accepted` and includes the active player config list:
@@ -74,9 +92,9 @@ Browser API/WS targets are controlled by:
   "run_id": "abc123def4",
   "rounds": 1,
   "players": [
-    { "name": "GPT-5.2", "provider": "openai", "model": "gpt-5.2" },
-    { "name": "Claude Opus", "provider": "anthropic", "model": "claude-opus-4-6" },
-    { "name": "Gemini 3 Flash", "provider": "google", "model": "gemini-3-flash-preview" },
+    { "name": "GPT-5.2", "provider": "openrouter", "model": "openai/gpt-5.2" },
+    { "name": "Claude Opus", "provider": "openrouter", "model": "anthropic/claude-opus-4-6" },
+    { "name": "Gemini 3 Flash", "provider": "openrouter", "model": "google/gemini-3-flash-preview" },
     { "name": "Stockfish-800", "provider": "engine", "model": "stockfish" }
   ]
 }
@@ -121,7 +139,7 @@ npm run build            # Type-check (no ESLint configured)
 │   move validation)        CPL, classification)           │
 │           │                                              │
 │  Player Adapters                                         │
-│  ├── LLMPlayer (OpenAI / Anthropic / Google)            │
+│  ├── LLMPlayer (OpenRouter)                             │
 │  └── UCIEnginePlayer (Stockfish)                        │
 └─────────────────────────────────────────────────────────┘
 ```
