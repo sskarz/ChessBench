@@ -111,7 +111,7 @@ def main() -> None:
     parser.add_argument("--move-delay", type=float, default=0.0)
     parser.add_argument("--max-retries", type=int, default=5)
     parser.add_argument("--temperature", type=float, default=0.0)
-    parser.add_argument("--max-tokens", type=int, default=int(os.getenv("LLM_MAX_TOKENS", "128")))
+    parser.add_argument("--max-tokens", type=int, default=int(os.getenv("LLM_MAX_TOKENS", "1024")))
     parser.add_argument("--reasoning-effort", default=os.getenv("LLM_REASONING_EFFORT", ""))
 
     parser.add_argument("--white-name", default="GPT")

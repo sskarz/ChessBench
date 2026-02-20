@@ -90,7 +90,12 @@ class _OpenRouterStubPlayer(LLMPlayer):
 
 
 class _QueuedOpenRouterStubPlayer(LLMPlayer):
-    def __init__(self, responses: list[object], max_tokens: int = 16) -> None:
+    def __init__(
+        self,
+        responses: list[object],
+        max_tokens: int = 16,
+        reasoning_effort: str | None = None,
+    ) -> None:
         self._responses = responses
         super().__init__(
             name="openrouter-stub",
@@ -100,6 +105,7 @@ class _QueuedOpenRouterStubPlayer(LLMPlayer):
             max_retries=2,
             temperature=0.0,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     def _init_client(self):
@@ -169,6 +175,39 @@ def test_llm_player_fallback_after_retry_exhaustion() -> None:
 
     assert result.move in board.legal_moves
     assert result.illegal_attempts == 2
+
+
+def test_llm_player_parses_moves_across_five_ply_game() -> None:
+    board = chess.Board()
+    history: list[chess.Move] = []
+    player = StubLLMPlayer(
+        responses=[
+            _ApiResult(text="e2e4", tokens=1, cost_usd=0.0),
+            _ApiResult(text="Best is e7e5 to mirror center control.", tokens=1, cost_usd=0.0),
+            _ApiResult(text="Nf3", tokens=1, cost_usd=0.0),
+            _ApiResult(text="I'll play Nc6.", tokens=1, cost_usd=0.0),
+            _ApiResult(text="```Bb5```", tokens=1, cost_usd=0.0),
+        ],
+        max_retries=1,
+    )
+
+    expected_sans = ["e4", "e5", "Nf3", "Nc6", "Bb5"]
+    parsed_sans: list[str] = []
+
+    for expected_san in expected_sans:
+        result = player.get_move(board, history)
+        assert result.move in board.legal_moves
+        assert result.illegal_attempts == 0
+
+        san = board.san(result.move)
+        parsed_sans.append(san)
+        board.push(result.move)
+        history.append(result.move)
+
+        assert san == expected_san
+
+    assert len(history) == 5
+    assert parsed_sans == expected_sans
 
 
 def test_call_api_handles_none_usage_tokens_and_missing_cost() -> None:
@@ -250,7 +289,7 @@ def test_call_api_retries_with_larger_budget_when_reasoning_exhausts_tokens() ->
         ),
         model_extra={},
     )
-    player = _QueuedOpenRouterStubPlayer([first, second], max_tokens=16)
+    player = _QueuedOpenRouterStubPlayer([first, second], max_tokens=16, reasoning_effort="low")
 
     result = player._call_api("system", "user")
 
@@ -259,5 +298,6 @@ def test_call_api_retries_with_larger_budget_when_reasoning_exhausts_tokens() ->
     assert result.cost_usd == pytest.approx(0.001001)
     assert len(player._client.chat.completions.calls) == 2
     assert player._client.chat.completions.calls[0]["max_completion_tokens"] == 16
-    assert player._client.chat.completions.calls[1]["max_completion_tokens"] == 128
-    assert player._client.chat.completions.calls[0]["extra_body"]["reasoning"]["effort"] == "none"
+    assert player._client.chat.completions.calls[1]["max_completion_tokens"] == 1024
+    assert player._client.chat.completions.calls[0]["extra_body"]["reasoning"]["effort"] == "low"
+    assert player._client.chat.completions.calls[1]["extra_body"]["reasoning"]["effort"] == "low"

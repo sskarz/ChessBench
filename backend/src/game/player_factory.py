@@ -53,16 +53,20 @@ def build_players_from_settings(cfg: Settings) -> tuple[list[PlayerAdapter], lis
             continue
 
         if provider == "engine":
+            engine_path = str(raw.get("engine_path") or cfg.stockfish_path)
             try:
                 player = UCIEnginePlayer(
                     name=name,
-                    engine_path=str(raw.get("engine_path") or cfg.stockfish_path),
+                    engine_path=engine_path,
                     time_limit=float(raw.get("time_limit", 0.2)),
                     skill_level=int(raw["skill_level"]) if "skill_level" in raw else None,
                     elo_limit=int(raw["elo_limit"]) if "elo_limit" in raw else None,
                 )
             except Exception as exc:
-                errors.append(f"Failed to build engine player '{name}': {exc}")
+                errors.append(
+                    f"Failed to build engine player '{name}' "
+                    f"(engine_path={engine_path}): {exc}"
+                )
                 continue
             players.append(player)
             continue
@@ -79,6 +83,21 @@ def build_players_from_settings(cfg: Settings) -> tuple[list[PlayerAdapter], lis
             if not model:
                 errors.append(f"Skipping LLM player '{name}' ({provider}) because model is missing")
                 continue
+            global_reasoning_effort = str(cfg.llm_reasoning_effort).strip()
+            player_reasoning_effort = str(raw.get("reasoning_effort", "")).strip()
+            if (
+                global_reasoning_effort
+                and player_reasoning_effort
+                and player_reasoning_effort.lower() != global_reasoning_effort.lower()
+            ):
+                logger.warning(
+                    "Ignoring player-specific reasoning_effort=%s for '%s'; "
+                    "using global LLM_REASONING_EFFORT=%s for fair comparisons.",
+                    player_reasoning_effort,
+                    name,
+                    global_reasoning_effort,
+                )
+            effective_reasoning_effort = global_reasoning_effort or player_reasoning_effort
             try:
                 player = LLMPlayer(
                     name=name,
@@ -88,8 +107,7 @@ def build_players_from_settings(cfg: Settings) -> tuple[list[PlayerAdapter], lis
                     max_retries=int(raw.get("max_retries", cfg.llm_max_retries)),
                     temperature=float(raw.get("temperature", cfg.llm_temperature)),
                     max_tokens=int(raw.get("max_tokens", cfg.llm_max_tokens)),
-                    reasoning_effort=str(raw.get("reasoning_effort", cfg.llm_reasoning_effort)).strip()
-                    or None,
+                    reasoning_effort=effective_reasoning_effort or None,
                     base_url=str(cfg.openrouter_base_url).strip() or "https://openrouter.ai/api/v1",
                     http_referer=str(cfg.openrouter_http_referer).strip(),
                     x_title=str(cfg.openrouter_x_title).strip(),

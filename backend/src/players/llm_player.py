@@ -22,8 +22,8 @@ Rules:
 - No explanations, no commentary, no formatting - just the move string
 - The move MUST be from the legal moves list provided
 - Do NOT include thinking or reasoning text"""
-MIN_REASONING_SAFE_MAX_TOKENS = 128
-DEFAULT_OPENAI_REASONING_EFFORT = "none"
+# Keep a large floor so models that spend tokens on hidden reasoning still emit a move.
+MIN_REASONING_SAFE_MAX_TOKENS = 1024
 _SAN_CANDIDATE_RE = re.compile(
     r"\b(?:O-O-O|O-O|[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?[+#]?)\b",
     flags=re.IGNORECASE,
@@ -63,10 +63,7 @@ class LLMPlayer(PlayerAdapter):
         self.base_url = base_url
         self.http_referer = http_referer
         self.x_title = x_title
-        normalized_reasoning_effort = (reasoning_effort or "").strip().lower()
-        if not normalized_reasoning_effort and self.model.lower().startswith("openai/gpt-5"):
-            normalized_reasoning_effort = DEFAULT_OPENAI_REASONING_EFFORT
-        self.reasoning_effort = normalized_reasoning_effort
+        self.reasoning_effort = (reasoning_effort or "").strip().lower()
         self._client = self._init_client()
 
     def _init_client(self) -> Any:
@@ -399,7 +396,7 @@ class LLMPlayer(PlayerAdapter):
             finish_reason = ""
 
         should_retry_for_length = not text.strip() and finish_reason == "length"
-        recovery_effort = "none" if self.reasoning_effort != "none" else self.reasoning_effort
+        recovery_effort = self.reasoning_effort
         recovery_tokens = max(self.max_tokens, MIN_REASONING_SAFE_MAX_TOKENS)
         can_retry = recovery_tokens != self.max_tokens or recovery_effort != self.reasoning_effort
 

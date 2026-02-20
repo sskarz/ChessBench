@@ -97,9 +97,9 @@ Run commands from the relevant subdirectory.
   - optional OpenRouter metadata: `OPENROUTER_HTTP_REFERER`, `OPENROUTER_X_TITLE`; optional API target override: `OPENROUTER_BASE_URL`
   - deprecated fallback aliases are still read during migration: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY` (prefer `OPENROUTER_API_KEY`)
   - tune runtime via `DATABASE_URL`, `ANALYSIS_DEPTH`, `STOCKFISH_THREADS`, `STOCKFISH_HASH_MB`, `MOVE_DELAY_SECONDS`, `MAX_MOVES_PER_SIDE`, `LLM_MAX_RETRIES`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`, `LLM_REASONING_EFFORT`
-  - optional: set `PLAYERS` as a JSON array to override the default tournament roster in `backend/src/config.py` (current defaults: GPT-5.2, Claude Opus, Gemini 3 Flash, Stockfish-800)
+  - optional: set `PLAYERS` as a JSON array to override the default tournament roster in `backend/src/config.py` (current defaults: GPT-5.2 Pro, Claude Opus 4.6, Gemini 3.1 Pro Preview, Stockfish-800)
   - `PLAYERS` supports both LLM and engine entries; engine entries can include `engine_path`, `time_limit`, `skill_level`, and `elo_limit`
-  - LLM entries in `PLAYERS` should use `provider: "openrouter"` and OpenRouter model IDs (example: `openai/gpt-5.2`), and can include `reasoning_effort`
+  - LLM entries in `PLAYERS` should use `provider: "openrouter"` and OpenRouter model IDs (example: `openai/gpt-5.2-pro`), and can include `reasoning_effort` (global `LLM_REASONING_EFFORT` takes precedence when set)
 - Frontend optional env vars:
   - `BACKEND_URL` (used by Next.js rewrites in `next.config.ts`)
   - `NEXT_PUBLIC_API_URL` (REST base URL)
