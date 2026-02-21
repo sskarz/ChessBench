@@ -76,10 +76,11 @@ export async function startTournament(
   return res.json() as Promise<TournamentStartResponse>;
 }
 
-export async function startBenchmark(): Promise<TournamentStartResponse> {
+export async function startBenchmark(rounds = 1): Promise<TournamentStartResponse> {
   const res = await fetch(`${BASE_URL}/api/benchmark/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rounds }),
   });
   if (!res.ok) {
     const msg =

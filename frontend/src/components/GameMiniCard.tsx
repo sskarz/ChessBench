@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef, useState, useEffect } from "react";
 import LiveBoard from "./LiveBoard";
 import EvalBar from "./EvalBar";
 import type { SingleGameState } from "@/hooks/useGameState";
@@ -10,7 +11,33 @@ interface GameMiniCardProps {
   onClick: () => void;
 }
 
+/** Lightweight placeholder shown when the card is off-screen. */
+function BoardPlaceholder({ moveCount }: { moveCount: number }) {
+  return (
+    <div className="aspect-square w-full rounded bg-surface-raised flex items-center justify-center">
+      <span className="font-[family-name:var(--font-mono)] text-xs text-muted">
+        {moveCount > 0 ? `${moveCount} moves` : "..."}
+      </span>
+    </div>
+  );
+}
+
 export default function GameMiniCard({ game, isSelected, onClick }: GameMiniCardProps) {
+  const cardRef = useRef<HTMLButtonElement>(null);
+  const [isVisible, setIsVisible] = useState(false);
+
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => setIsVisible(entry.isIntersecting),
+      { rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   const lastMove = game.moves.length > 0 ? game.moves[game.moves.length - 1] : null;
   const evalCp = lastMove?.eval_cp ?? null;
   const evalMate = lastMove?.eval_mate ?? null;
@@ -26,6 +53,7 @@ export default function GameMiniCard({ game, isSelected, onClick }: GameMiniCard
 
   return (
     <button
+      ref={cardRef}
       onClick={onClick}
       className={`w-full rounded-lg border bg-surface p-3 text-left transition-all hover:border-accent/50 ${
         isSelected
@@ -53,10 +81,14 @@ export default function GameMiniCard({ game, isSelected, onClick }: GameMiniCard
           <EvalBar evalCp={evalCp} winPctWhite={winPctWhite} evalMate={evalMate} compact />
         </div>
         <div className="flex-1 pointer-events-none">
-          <LiveBoard
-            fen={game.fen}
-            lastMoveUci={lastMove?.move_uci}
-          />
+          {isVisible ? (
+            <LiveBoard
+              fen={game.fen}
+              lastMoveUci={lastMove?.move_uci}
+            />
+          ) : (
+            <BoardPlaceholder moveCount={game.moves.length} />
+          )}
         </div>
       </div>
 

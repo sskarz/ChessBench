@@ -16,6 +16,7 @@ from sqlmodel import Session, select
 
 from src.api.models import (
     AccuracyDistribution,
+    BenchmarkStartRequest,
     GameAnalysisResponse,
     GameDetail,
     GameListResponse,
@@ -361,11 +362,12 @@ async def _run_benchmark(
     run_id: str,
     players: list[PlayerAdapter],
     descriptors: dict[str, dict[str, str]],
+    rounds: int = 1,
 ) -> None:
-    manager = _build_tournament_manager(players, descriptors, rounds=1)
+    manager = _build_tournament_manager(players, descriptors, rounds=rounds)
 
     try:
-        summary = await manager.run_benchmark()
+        summary = await manager.run_benchmark(rounds=rounds)
         runtime.live.status = "completed"
         runtime.live.latest_standings = summary.get("standings", [])
         runtime.live.current_game = None
@@ -563,7 +565,7 @@ async def resume_tournament(session: Session = Depends(get_session)) -> Tourname
 
 
 @app.post("/api/benchmark/start", response_model=TournamentStartResponse, status_code=status.HTTP_202_ACCEPTED)
-async def start_benchmark() -> TournamentStartResponse:
+async def start_benchmark(body: BenchmarkStartRequest = BenchmarkStartRequest()) -> TournamentStartResponse:
     if runtime.tournament_task and not runtime.tournament_task.done():
         raise HTTPException(status_code=409, detail="Tournament is already running")
 
@@ -622,13 +624,14 @@ async def start_benchmark() -> TournamentStartResponse:
             run_id=run_id,
             players=all_players,
             descriptors={row["name"]: row for row in player_configs},
+            rounds=body.rounds,
         )
     )
 
     return TournamentStartResponse(
         status="accepted",
         run_id=run_id,
-        rounds=1,
+        rounds=body.rounds,
         players=player_configs,
     )
 

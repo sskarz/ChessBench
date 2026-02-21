@@ -155,6 +155,10 @@ class TournamentStartRequest(BaseModel):
     rounds: int = Field(default=1, ge=1)
 
 
+class BenchmarkStartRequest(BaseModel):
+    rounds: int = Field(default=1, ge=1)
+
+
 class TournamentStartResponse(BaseModel):
     status: str
     run_id: str

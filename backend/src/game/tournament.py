@@ -11,12 +11,7 @@ from typing import Any, Literal
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
-from src.analysis.elo_estimator import (
-    combine_weighted_elos,
-    compute_filtered_cpl,
-    confidence_from_filtered_result,
-    estimate_elo_from_cpl,
-)
+from src.analysis.elo_estimator import estimate_elo_from_aggregate
 from src.config import Settings
 from src.db.models import Game, MoveAnalysis, Player, Tournament
 from src.game.orchestrator import GameOrchestrator, LiveMoveEvent, ResumeState
@@ -57,20 +52,19 @@ def _generate_pairing_schedule(
 
 
 def _generate_benchmark_schedule(
-    num_players: int, sf_index: int
+    num_players: int, sf_index: int, rounds: int = 1
 ) -> list[tuple[int, int, int, int]]:
-    """Generate benchmark pairings: each LLM plays 2 games vs Stockfish (one as white, one as black)."""
+    """Generate benchmark pairings: each LLM plays 2 games vs Stockfish per round."""
     schedule: list[tuple[int, int, int, int]] = []
     idx = 0
-    for i in range(num_players):
-        if i == sf_index:
-            continue
-        # LLM as white
-        schedule.append((1, idx, i, sf_index))
-        idx += 1
-        # LLM as black
-        schedule.append((1, idx, sf_index, i))
-        idx += 1
+    for r in range(1, rounds + 1):
+        for i in range(num_players):
+            if i == sf_index:
+                continue
+            schedule.append((r, idx, i, sf_index))
+            idx += 1
+            schedule.append((r, idx, sf_index, i))
+            idx += 1
     return schedule
 
 
@@ -198,8 +192,8 @@ class TournamentManager:
                 "standings": final_standings,
             }
 
-    async def run_benchmark(self) -> dict[str, Any]:
-        """Run benchmark mode: each LLM plays 2 games vs Stockfish (white & black)."""
+    async def run_benchmark(self, rounds: int = 1) -> dict[str, Any]:
+        """Run benchmark mode: each LLM plays 2 games vs Stockfish per round."""
         if self._run_lock.locked():
             raise RuntimeError("Tournament is already running")
 
@@ -243,13 +237,13 @@ class TournamentManager:
                 session.commit()
 
             player_names = [p.get_name() for p in self.players]
-            schedule = _generate_benchmark_schedule(len(self.players), sf_index)
+            schedule = _generate_benchmark_schedule(len(self.players), sf_index, rounds)
 
             with self.session_factory() as session:
                 tournament = Tournament(
                     name=f"Benchmark {datetime.utcnow().isoformat()}",
                     format="benchmark",
-                    rounds=1,
+                    rounds=rounds,
                     status="running",
                     player_names_json=json.dumps(player_names),
                 )
@@ -295,8 +289,10 @@ class TournamentManager:
                     abandon_game=self._abandon_game,
                 )
                 # Benchmark games are all LLM vs Stockfish — fully independent.
-                # Run all games in parallel instead of the default N_players // 2.
-                scheduler._max_concurrent = len(schedule)
+                # Keep 6 games active at all times (one per matchup slot) to
+                # avoid overwhelming the CPU with too many Stockfish processes.
+                num_llms = len(self.players) - 1  # exclude Stockfish
+                scheduler._max_concurrent = num_llms * 2
                 games_played = await scheduler.run_schedule(
                     schedule=schedule,
                     pre_allocated_game_ids=pre_allocated_game_ids,
@@ -402,93 +398,99 @@ class TournamentManager:
                 blunders=game_result["black_blunders"],
             )
 
-        # Compute CPL-based Elo for LLM side(s)
-        move_rows = session.exec(
-            select(MoveAnalysis)
-            .where(MoveAnalysis.game_id == game_id)
-            .order_by(MoveAnalysis.id)
-        ).all()
-        move_dicts = [
-            {
-                "color": m.color,
-                "eval_before_cp": m.eval_before_cp,
-                "centipawn_loss": m.centipawn_loss,
-            }
-            for m in move_rows
-        ]
-
+        # Recompute Elo from ALL qualifying moves across this tournament.
+        # Using global CPL avoids non-linearity bias from averaging per-game Elo estimates.
+        tournament_id = game.tournament_id
         benchmark_elo = self.settings.benchmark_stockfish_elo
         eval_cap = self.settings.benchmark_eval_cap
         min_qualifying_moves = self.settings.benchmark_min_qualifying_moves
-        low_conf_weight = self.settings.benchmark_low_conf_weight
 
-        if not white_is_engine:
-            cpl_result = compute_filtered_cpl(
-                move_dicts,
-                "white",
-                eval_cap=eval_cap,
-                min_qualifying_moves=min_qualifying_moves,
+        llm_rows = [r for r in (white_row, black_row) if r.provider != "engine"]
+        for row in llm_rows:
+            player_id = row.id
+            self._recompute_benchmark_elo(
+                session, row, player_id, tournament_id,
+                eval_cap, min_qualifying_moves, benchmark_elo,
             )
-            white_row.elo_white_qualifying_moves = cpl_result.qualifying_moves
-            white_row.elo_white_confidence = confidence_from_filtered_result(cpl_result)
-            if result == "1-0":
-                llm_result = "win"
-            elif result == "0-1":
-                llm_result = "loss"
-            else:
-                llm_result = "draw"
-            if cpl_result.has_estimate:
-                estimated = estimate_elo_from_cpl(cpl_result.avg_cpl, llm_result, benchmark_elo)
-                white_row.elo_white = estimated
-            else:
-                white_row.elo_white = 0.0
 
-        if not black_is_engine:
-            cpl_result = compute_filtered_cpl(
-                move_dicts,
-                "black",
-                eval_cap=eval_cap,
-                min_qualifying_moves=min_qualifying_moves,
-            )
-            black_row.elo_black_qualifying_moves = cpl_result.qualifying_moves
-            black_row.elo_black_confidence = confidence_from_filtered_result(cpl_result)
-            if result == "0-1":
-                llm_result = "win"
-            elif result == "1-0":
-                llm_result = "loss"
-            else:
-                llm_result = "draw"
-            if cpl_result.has_estimate:
-                estimated = estimate_elo_from_cpl(cpl_result.avg_cpl, llm_result, benchmark_elo)
-                black_row.elo_black = estimated
-            else:
-                black_row.elo_black = 0.0
+    def _recompute_benchmark_elo(
+        self,
+        session: Session,
+        row: Player,
+        player_id: int,
+        tournament_id: int,
+        eval_cap: int,
+        min_qualifying_moves: int,
+        benchmark_elo: float,
+    ) -> None:
+        """Recompute a player's benchmark Elo from all qualifying moves in the tournament."""
+        for color, elo_attr, qm_attr, conf_attr, is_white in [
+            ("white", "elo_white", "elo_white_qualifying_moves", "elo_white_confidence", True),
+            ("black", "elo_black", "elo_black_qualifying_moves", "elo_black_confidence", False),
+        ]:
+            # Query all qualifying moves for this player as this color
+            player_col = Game.white_id if is_white else Game.black_id
+            all_moves = session.exec(
+                select(MoveAnalysis)
+                .join(Game, MoveAnalysis.game_id == Game.id)
+                .where(
+                    Game.tournament_id == tournament_id,
+                    player_col == player_id,
+                    Game.status == "completed",
+                    MoveAnalysis.color == color,
+                    MoveAnalysis.is_book_move == False,  # noqa: E712
+                    MoveAnalysis.eval_before_cp.is_not(None),  # type: ignore[union-attr]
+                    func.abs(MoveAnalysis.eval_before_cp) <= eval_cap,
+                )
+            ).all()
 
-        if not white_is_engine:
-            white_side = white_row.elo_white if white_row.elo_white_confidence != "none" else None
-            black_side = white_row.elo_black if white_row.elo_black_confidence != "none" else None
-            combined_elo, combined_conf = combine_weighted_elos(
-                white_elo=white_side,
-                white_confidence=white_row.elo_white_confidence,
-                black_elo=black_side,
-                black_confidence=white_row.elo_black_confidence,
-                low_conf_weight=low_conf_weight,
-            )
-            white_row.benchmark_elo = combined_elo
-            white_row.elo_confidence = combined_conf
+            qm = len(all_moves)
+            setattr(row, qm_attr, qm)
 
-        if not black_is_engine:
-            white_side = black_row.elo_white if black_row.elo_white_confidence != "none" else None
-            black_side = black_row.elo_black if black_row.elo_black_confidence != "none" else None
-            combined_elo, combined_conf = combine_weighted_elos(
-                white_elo=white_side,
-                white_confidence=black_row.elo_white_confidence,
-                black_elo=black_side,
-                black_confidence=black_row.elo_black_confidence,
-                low_conf_weight=low_conf_weight,
+            if qm == 0:
+                setattr(row, elo_attr, 0.0)
+                setattr(row, conf_attr, "none")
+                continue
+
+            setattr(row, conf_attr, "high" if qm >= min_qualifying_moves else "low")
+
+            # Global average CPL across all qualifying moves
+            avg_cpl = sum(m.centipawn_loss for m in all_moves) / qm
+
+            # Win/draw/loss record for this side
+            games_as_side = session.exec(
+                select(Game).where(
+                    Game.tournament_id == tournament_id,
+                    player_col == player_id,
+                    Game.status == "completed",
+                )
+            ).all()
+            if is_white:
+                wins = sum(1 for g in games_as_side if g.result == "1-0")
+                losses = sum(1 for g in games_as_side if g.result == "0-1")
+            else:
+                wins = sum(1 for g in games_as_side if g.result == "0-1")
+                losses = sum(1 for g in games_as_side if g.result == "1-0")
+            draws = sum(1 for g in games_as_side if g.result == "1/2-1/2")
+
+            estimated = estimate_elo_from_aggregate(avg_cpl, wins, draws, losses, benchmark_elo)
+            setattr(row, elo_attr, estimated)
+
+        # Combine white + black weighted by qualifying move count
+        qm_w = row.elo_white_qualifying_moves
+        qm_b = row.elo_black_qualifying_moves
+        total = qm_w + qm_b
+        if total > 0:
+            elo_w = row.elo_white if qm_w > 0 else 0.0
+            elo_b = row.elo_black if qm_b > 0 else 0.0
+            row.benchmark_elo = round((elo_w * qm_w + elo_b * qm_b) / total, 1)
+            row.elo_confidence = (
+                "high" if qm_w >= min_qualifying_moves and qm_b >= min_qualifying_moves
+                else "low"
             )
-            black_row.benchmark_elo = combined_elo
-            black_row.elo_confidence = combined_conf
+        else:
+            row.benchmark_elo = 0.0
+            row.elo_confidence = "none"
 
     async def resume_round_robin(self, tournament_id: int) -> dict[str, Any]:
         """Resume an interrupted tournament from its last known state."""

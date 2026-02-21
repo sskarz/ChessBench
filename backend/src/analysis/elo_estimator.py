@@ -73,6 +73,40 @@ def estimate_elo_from_cpl(
     return max(200, min(3000, round(anchored_elo, 1)))
 
 
+def estimate_elo_from_aggregate(
+    avg_cpl: float,
+    wins: int,
+    draws: int,
+    losses: int,
+    opponent_elo: float = 1320,
+) -> float:
+    """Estimate Elo from aggregate CPL and win/draw/loss record.
+
+    Uses the global average CPL (across all qualifying moves) and scales
+    the result adjustment proportionally to win rate.
+
+    Args:
+        avg_cpl: Global filtered average centipawn loss across all games.
+        wins: Total wins for this side.
+        draws: Total draws.
+        losses: Total losses.
+        opponent_elo: The benchmark opponent's known Elo.
+
+    Returns:
+        Estimated Elo, clamped to [200, 3000].
+    """
+    base_elo = _interpolate_elo(avg_cpl)
+
+    total = wins + draws + losses
+    if total > 0:
+        win_rate = (wins + draws * 0.5) / total
+        # Scale from -RESULT_ADJUSTMENT (all losses) to +RESULT_ADJUSTMENT (all wins)
+        base_elo += RESULT_ADJUSTMENT * (2 * win_rate - 1)
+
+    anchored_elo = base_elo + (float(opponent_elo) - DEFAULT_BENCHMARK_ELO)
+    return max(200, min(3000, round(anchored_elo, 1)))
+
+
 @dataclass
 class FilteredCPLResult:
     avg_cpl: float

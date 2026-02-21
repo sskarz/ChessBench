@@ -64,7 +64,7 @@ export default function Home() {
     setIsBenchmarking(true);
     setStartError(null);
     try {
-      await startBenchmark();
+      await startBenchmark(10);
     } catch (err) {
       setStartError(err instanceof Error ? err.message : "Failed to start benchmark");
     } finally {
