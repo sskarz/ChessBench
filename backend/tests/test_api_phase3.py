@@ -43,8 +43,8 @@ def _build_test_engine(db_file: Path):
 
 def _seed_data(engine) -> None:
     with Session(engine) as session:
-        alpha = Player(name="Alpha", provider="engine", model_id="stockfish", elo=1210.5, games_played=1, wins=1)
-        beta = Player(name="Beta", provider="engine", model_id="stockfish", elo=1189.5, games_played=1, losses=1)
+        alpha = Player(name="Alpha", provider="openrouter", model_id="test/alpha", elo=1210.5, games_played=1, wins=1)
+        beta = Player(name="Beta", provider="openrouter", model_id="test/beta", elo=1189.5, games_played=1, losses=1)
         session.add(alpha)
         session.add(beta)
         session.commit()
@@ -270,3 +270,55 @@ def test_tournament_resume_endpoint_rejects_partial_roster(tmp_path: Path, monke
         assert detail["errors"] == errors
         assert detail["configured_players"] >= 3
         assert detail["initialized_players"] == 3
+
+
+def test_benchmark_start_endpoint_rejects_partial_roster(monkeypatch) -> None:
+    monkeypatch.setattr(server, "init_db", lambda: None)
+
+    players = [DummyPlayer("A"), DummyPlayer("B"), DummyPlayer("C")]
+    errors = ["Failed to build player 'Broken'"]
+    monkeypatch.setattr(server, "build_players_from_settings", lambda _settings: (players, errors))
+
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.tournament_task = None
+
+    with TestClient(app) as client:
+        response = client.post("/api/benchmark/start")
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["message"] == "One or more configured players failed to initialize"
+        assert detail["errors"] == errors
+        assert detail["configured_players"] >= 3
+        assert detail["initialized_players"] == 3
+
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.tournament_task = None
+
+
+def test_standings_hide_benchmark_anchor_only(tmp_path: Path) -> None:
+    engine = _build_test_engine(tmp_path / "anchor.db")
+    _seed_data(engine)
+
+    with Session(engine) as session:
+        session.add(Player(name="Engine Rival", provider="engine", model_id="lc0", elo=1300.0))
+        session.add(Player(name="Stockfish-1320", provider="engine", model_id="stockfish", elo=1200.0))
+        session.commit()
+
+    def _override_get_session() -> Generator[Session, None, None]:
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _override_get_session
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.tournament_task = None
+
+    with TestClient(app) as client:
+        standings = client.get("/api/standings")
+        assert standings.status_code == 200
+        names = {row["name"] for row in standings.json()}
+        assert "Engine Rival" in names
+        assert "Stockfish-1320" not in names
+
+    app.dependency_overrides.clear()
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.tournament_task = None

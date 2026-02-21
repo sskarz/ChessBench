@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 class StandingsEntry(BaseModel):
     name: str
     elo: float
+    elo_white: float
+    elo_black: float
     wins: int
     losses: int
     draws: int
@@ -85,6 +87,8 @@ class PlayerStats(BaseModel):
     provider: str
     model_id: str
     elo: float
+    elo_white: float
+    elo_black: float
     games_played: int
     wins: int
     losses: int

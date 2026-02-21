@@ -31,6 +31,8 @@ export const CLASSIFICATION_ICONS: Record<MoveClassification, string> = {
 export interface StandingsEntry {
   name: string;
   elo: number;
+  elo_white: number;
+  elo_black: number;
   wins: number;
   losses: number;
   draws: number;
@@ -107,6 +109,8 @@ export interface PlayerStats {
   provider: string;
   model_id: string;
   elo: number;
+  elo_white: number;
+  elo_black: number;
   games_played: number;
   wins: number;
   losses: number;

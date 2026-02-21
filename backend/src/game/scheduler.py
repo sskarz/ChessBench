@@ -65,6 +65,7 @@ class ParallelScheduler:
         pre_allocated_game_ids: dict[int, int],
         completed_indices: set[int] | None = None,
         resume_states: dict[int, ResumeState] | None = None,
+        allow_concurrent_players: bool = False,
     ) -> int:
         """Execute pairings with up to max_concurrent_games in parallel.
 
@@ -93,14 +94,15 @@ class ParallelScheduler:
 
                 for entry in pending:
                     round_number, pairing_idx, w_idx, b_idx = entry
-                    if (
-                        len(active_tasks) + launched < self._max_concurrent
-                        and w_idx not in busy_players
-                        and b_idx not in busy_players
+                    if len(active_tasks) + launched >= self._max_concurrent:
+                        remaining.append(entry)
+                    elif allow_concurrent_players or (
+                        w_idx not in busy_players and b_idx not in busy_players
                     ):
                         to_launch.append(entry)
-                        busy_players.add(w_idx)
-                        busy_players.add(b_idx)
+                        if not allow_concurrent_players:
+                            busy_players.add(w_idx)
+                            busy_players.add(b_idx)
                         launched += 1
                     else:
                         remaining.append(entry)
@@ -235,8 +237,9 @@ class ParallelScheduler:
 
                     finally:
                         # Cleanup per-game resources
-                        busy_players.discard(w_idx)
-                        busy_players.discard(b_idx)
+                        if not allow_concurrent_players:
+                            busy_players.discard(w_idx)
+                            busy_players.discard(b_idx)
                         try:
                             analyzer_ref.shutdown()
                         except Exception:

@@ -11,6 +11,8 @@ class Player(SQLModel, table=True):
     provider: str
     model_id: str
     elo: float = Field(default=1200.0)
+    elo_white: float = Field(default=0.0)
+    elo_black: float = Field(default=0.0)
     games_played: int = Field(default=0)
     wins: int = Field(default=0)
     losses: int = Field(default=0)

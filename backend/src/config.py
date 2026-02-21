@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 128
     llm_reasoning_effort: str = "none"
 
+    benchmark_stockfish_elo: int = 1320
     max_concurrent_games: int = 0  # 0 = auto (floor(N_players / 2))
 
     database_url: str = "sqlite:///./arena.db"

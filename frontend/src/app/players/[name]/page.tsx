@@ -60,8 +60,12 @@ export default function PlayerPage({ params }: { params: Promise<{ name: string 
     );
   }
 
+  const fmtElo = (v: number) => (v === 0 ? "--" : Math.round(v).toString());
+
   const statCards: { label: string; value: string; color?: string }[] = [
-    { label: "Elo", value: Math.round(stats.elo).toString() },
+    { label: "Elo", value: fmtElo(stats.elo) },
+    { label: "Elo (White)", value: fmtElo(stats.elo_white) },
+    { label: "Elo (Black)", value: fmtElo(stats.elo_black) },
     { label: "Games", value: stats.games_played.toString() },
     {
       label: "Record",

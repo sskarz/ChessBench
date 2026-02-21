@@ -31,8 +31,12 @@ export default function Scoreboard({ standings }: ScoreboardProps) {
     return sortAsc ? cmp : -cmp;
   });
 
+  const fmtElo = (v: number) => (v === 0 ? "--" : Math.round(v).toString());
+
   const columns: { key: SortKey; label: string; fmt?: (v: number) => string; align?: string }[] = [
-    { key: "elo", label: "Elo", fmt: (v) => Math.round(v).toString() },
+    { key: "elo", label: "Elo", fmt: fmtElo },
+    { key: "elo_white", label: "W Elo", fmt: fmtElo },
+    { key: "elo_black", label: "B Elo", fmt: fmtElo },
     { key: "wins", label: "W" },
     { key: "losses", label: "L" },
     { key: "draws", label: "D" },

@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
+from src.analysis.elo_estimator import compute_filtered_cpl, estimate_elo_from_cpl
 from src.config import Settings
 from src.db.models import Game, MoveAnalysis, Player, Tournament
 from src.game.orchestrator import GameOrchestrator, LiveMoveEvent, ResumeState
@@ -48,6 +49,32 @@ def _generate_pairing_schedule(
                 schedule.append((round_number, idx, w_idx, b_idx))
                 idx += 1
     return schedule
+
+
+def _generate_benchmark_schedule(
+    num_players: int, sf_index: int
+) -> list[tuple[int, int, int, int]]:
+    """Generate benchmark pairings: each LLM plays 2 games vs Stockfish (one as white, one as black)."""
+    schedule: list[tuple[int, int, int, int]] = []
+    idx = 0
+    for i in range(num_players):
+        if i == sf_index:
+            continue
+        # LLM as white
+        schedule.append((1, idx, i, sf_index))
+        idx += 1
+        # LLM as black
+        schedule.append((1, idx, sf_index, i))
+        idx += 1
+    return schedule
+
+
+def _is_benchmark_anchor_row(player: Player) -> bool:
+    return (
+        player.provider == "engine"
+        and player.model_id == "stockfish"
+        and player.name.startswith("Stockfish-")
+    )
 
 
 class TournamentManager:
@@ -165,6 +192,238 @@ class TournamentManager:
                 "games_played": games_played,
                 "standings": final_standings,
             }
+
+    async def run_benchmark(self) -> dict[str, Any]:
+        """Run benchmark mode: each LLM plays 2 games vs Stockfish (white & black)."""
+        if self._run_lock.locked():
+            raise RuntimeError("Tournament is already running")
+
+        async with self._run_lock:
+            # Find the Stockfish player index
+            sf_index: int | None = None
+            for i, p in enumerate(self.players):
+                desc = self.player_descriptors.get(p.get_name(), {})
+                if desc.get("provider") == "engine":
+                    sf_index = i
+                    break
+            if sf_index is None:
+                raise ValueError("No engine player found for benchmark")
+
+            with self.session_factory() as session:
+                player_ids = self._ensure_players(session)
+                next_game_id = self._next_game_id(session)
+
+                # Reset benchmark Elo slots so each benchmark run is self-contained.
+                for player_id in player_ids.values():
+                    row = session.get(Player, player_id)
+                    if row is None or _is_benchmark_anchor_row(row):
+                        continue
+                    row.elo_white = 0.0
+                    row.elo_black = 0.0
+                    row.elo = 0.0
+                session.commit()
+
+            player_names = [p.get_name() for p in self.players]
+            schedule = _generate_benchmark_schedule(len(self.players), sf_index)
+
+            with self.session_factory() as session:
+                tournament = Tournament(
+                    name=f"Benchmark {datetime.utcnow().isoformat()}",
+                    format="benchmark",
+                    rounds=1,
+                    status="running",
+                    player_names_json=json.dumps(player_names),
+                )
+                session.add(tournament)
+                session.commit()
+                session.refresh(tournament)
+                tournament_id = tournament.id
+
+            pre_allocated_game_ids: dict[int, int] = {}
+            for _, pairing_idx, _, _ in schedule:
+                pre_allocated_game_ids[pairing_idx] = next_game_id
+                next_game_id += 1
+
+            with self.session_factory() as session:
+                for _, pairing_idx, w_idx, b_idx in schedule:
+                    game_id = pre_allocated_game_ids[pairing_idx]
+                    white = self.players[w_idx]
+                    black = self.players[b_idx]
+                    db_game = Game(
+                        id=game_id,
+                        tournament_id=tournament_id,
+                        white_id=player_ids[white.get_name()],
+                        black_id=player_ids[black.get_name()],
+                        status="in_progress",
+                        pairing_index=pairing_idx,
+                    )
+                    session.add(db_game)
+                session.commit()
+
+            try:
+                scheduler = ParallelScheduler(
+                    players=self.players,
+                    player_ids=player_ids,
+                    tournament_id=tournament_id,
+                    session_factory=self.session_factory,
+                    event_callback=self.event_callback,
+                    settings=self.settings,
+                    player_descriptors=self.player_descriptors,
+                    persist_move=self._persist_move,
+                    on_move_event=self._on_move_event,
+                    finalize_game=self._finalize_benchmark_game,
+                    get_standings=self.get_standings,
+                    abandon_game=self._abandon_game,
+                )
+                games_played = await scheduler.run_schedule(
+                    schedule=schedule,
+                    pre_allocated_game_ids=pre_allocated_game_ids,
+                    allow_concurrent_players=True,
+                )
+
+                with self.session_factory() as session:
+                    t = session.get(Tournament, tournament_id)
+                    if t:
+                        t.status = "completed"
+                        t.completed_at = datetime.utcnow()
+                    session.commit()
+                    final_standings = self.get_standings(session=session)
+
+            except Exception:
+                with self.session_factory() as session:
+                    t = session.get(Tournament, tournament_id)
+                    if t:
+                        t.status = "error"
+                        t.error_message = "Benchmark interrupted"
+                    session.commit()
+                raise
+
+            return {
+                "games_played": games_played,
+                "standings": final_standings,
+            }
+
+    def _finalize_benchmark_game(
+        self,
+        session: Session,
+        game_id: int,
+        game_result: dict[str, Any],
+        white_player_id: int,
+        black_player_id: int,
+        started_at: datetime,
+        completed_at: datetime,
+    ) -> None:
+        """Finalize a benchmark game: persist stats and estimate Elo from CPL."""
+        white_row = session.get(Player, white_player_id)
+        black_row = session.get(Player, black_player_id)
+        if white_row is None or black_row is None:
+            raise RuntimeError("Missing player row while saving benchmark game")
+
+        game = session.get(Game, game_id)
+        if game is None:
+            raise RuntimeError(f"Game {game_id} not found for finalization")
+
+        # Persist game data (same as _finalize_game)
+        game.status = "completed"
+        game.result = game_result["result"]
+        game.termination = game_result["termination"]
+        game.pgn = game_result["pgn"]
+        game.moves_count = game_result["moves_count"]
+        game.white_avg_cpl = game_result["white_avg_cpl"]
+        game.black_avg_cpl = game_result["black_avg_cpl"]
+        game.white_accuracy = game_result["white_accuracy"]
+        game.black_accuracy = game_result["black_accuracy"]
+        game.white_blunders = game_result["white_blunders"]
+        game.black_blunders = game_result["black_blunders"]
+        game.white_mistakes = game_result["white_mistakes"]
+        game.black_mistakes = game_result["black_mistakes"]
+        game.white_illegal_attempts = game_result["white_illegal_attempts"]
+        game.black_illegal_attempts = game_result["black_illegal_attempts"]
+        game.white_tokens = game_result["white_tokens"]
+        game.black_tokens = game_result["black_tokens"]
+        game.white_cost_usd = game_result["white_cost_usd"]
+        game.black_cost_usd = game_result["black_cost_usd"]
+        game.duration_seconds = game_result["duration_seconds"]
+        game.opening_name = game_result.get("opening_name")
+        game.opening_eco = game_result.get("opening_eco")
+        game.started_at = started_at
+        game.completed_at = completed_at
+
+        # Determine which side is the LLM (not engine)
+        white_is_engine = white_row.provider == "engine"
+        black_is_engine = black_row.provider == "engine"
+
+        # Determine game result string from LLM perspective
+        result = game_result["result"]
+
+        # Update LLM player stats (not Stockfish)
+        if not white_is_engine:
+            self._apply_player_result(
+                player=white_row,
+                result=result,
+                as_white=True,
+                avg_cpl=game_result["white_avg_cpl"],
+                accuracy=game_result["white_accuracy"],
+                tokens=game_result["white_tokens"],
+                cost=game_result["white_cost_usd"],
+            )
+        if not black_is_engine:
+            self._apply_player_result(
+                player=black_row,
+                result=result,
+                as_white=False,
+                avg_cpl=game_result["black_avg_cpl"],
+                accuracy=game_result["black_accuracy"],
+                tokens=game_result["black_tokens"],
+                cost=game_result["black_cost_usd"],
+            )
+
+        # Compute CPL-based Elo for LLM side(s)
+        move_rows = session.exec(
+            select(MoveAnalysis)
+            .where(MoveAnalysis.game_id == game_id)
+            .order_by(MoveAnalysis.id)
+        ).all()
+        move_dicts = [
+            {
+                "color": m.color,
+                "eval_before_cp": m.eval_before_cp,
+                "centipawn_loss": m.centipawn_loss,
+            }
+            for m in move_rows
+        ]
+
+        benchmark_elo = self.settings.benchmark_stockfish_elo
+
+        if not white_is_engine:
+            cpl_result = compute_filtered_cpl(move_dicts, "white")
+            if result == "1-0":
+                llm_result = "win"
+            elif result == "0-1":
+                llm_result = "loss"
+            else:
+                llm_result = "draw"
+            estimated = estimate_elo_from_cpl(cpl_result.avg_cpl, llm_result, benchmark_elo)
+            white_row.elo_white = estimated
+            if white_row.elo_black > 0:
+                white_row.elo = round((white_row.elo_white + white_row.elo_black) / 2, 1)
+            else:
+                white_row.elo = estimated
+
+        if not black_is_engine:
+            cpl_result = compute_filtered_cpl(move_dicts, "black")
+            if result == "0-1":
+                llm_result = "win"
+            elif result == "1-0":
+                llm_result = "loss"
+            else:
+                llm_result = "draw"
+            estimated = estimate_elo_from_cpl(cpl_result.avg_cpl, llm_result, benchmark_elo)
+            black_row.elo_black = estimated
+            if black_row.elo_white > 0:
+                black_row.elo = round((black_row.elo_white + black_row.elo_black) / 2, 1)
+            else:
+                black_row.elo = estimated
 
     async def resume_round_robin(self, tournament_id: int) -> dict[str, Any]:
         """Resume an interrupted tournament from its last known state."""
@@ -660,6 +919,10 @@ class TournamentManager:
             players = session.exec(select(Player)).all()
             standings: list[dict[str, Any]] = []
             for player in players:
+                # Hide benchmark anchor rows from standings.
+                if _is_benchmark_anchor_row(player):
+                    continue
+
                 games = session.exec(
                     select(Game).where(
                         or_(Game.white_id == player.id, Game.black_id == player.id),
@@ -676,6 +939,8 @@ class TournamentManager:
                     {
                         "name": player.name,
                         "elo": round(player.elo, 1),
+                        "elo_white": round(player.elo_white, 1),
+                        "elo_black": round(player.elo_black, 1),
                         "wins": player.wins,
                         "losses": player.losses,
                         "draws": player.draws,

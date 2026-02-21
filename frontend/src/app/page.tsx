@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { useGameState } from "@/hooks/useGameState";
-import { startTournament, resumeTournament } from "@/lib/api";
+import { startTournament, resumeTournament, startBenchmark } from "@/lib/api";
 import Navigation from "@/components/Navigation";
 import LiveBoard from "@/components/LiveBoard";
 import EvalBar from "@/components/EvalBar";
@@ -27,11 +27,13 @@ export default function Home() {
 
   const [isStarting, setIsStarting] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
+  const [isBenchmarking, setIsBenchmarking] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
   const tournamentBusy =
     isStarting ||
     isResuming ||
+    isBenchmarking ||
     tournamentStatus === "running" ||
     tournamentStatus === "queued";
 
@@ -56,6 +58,18 @@ export default function Home() {
       setStartError(err instanceof Error ? err.message : "Failed to resume tournament");
     } finally {
       setIsResuming(false);
+    }
+  }
+
+  async function handleStartBenchmark() {
+    setIsBenchmarking(true);
+    setStartError(null);
+    try {
+      await startBenchmark();
+    } catch (err) {
+      setStartError(err instanceof Error ? err.message : "Failed to start benchmark");
+    } finally {
+      setIsBenchmarking(false);
     }
   }
 
@@ -295,7 +309,7 @@ export default function Home() {
                     <p className="font-[family-name:var(--font-display)] text-lg font-semibold text-secondary">
                       No active game
                     </p>
-                    <div className="mt-4 flex gap-3">
+                    <div className="mt-4 flex flex-wrap gap-3">
                       <button
                         onClick={handleStartTournament}
                         disabled={tournamentBusy}
@@ -308,6 +322,20 @@ export default function Home() {
                           </span>
                         ) : (
                           "Start Tournament"
+                        )}
+                      </button>
+                      <button
+                        onClick={handleStartBenchmark}
+                        disabled={tournamentBusy}
+                        className="rounded-lg bg-[var(--clr-best)] px-6 py-2.5 font-[family-name:var(--font-display)] text-sm font-semibold text-white transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {isBenchmarking ? (
+                          <span className="flex items-center gap-2">
+                            <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                            Benchmarking...
+                          </span>
+                        ) : (
+                          "Start Benchmark"
                         )}
                       </button>
                       {(tournamentStatus === "idle" || tournamentStatus === "error" || tournamentStatus === "completed") && (
