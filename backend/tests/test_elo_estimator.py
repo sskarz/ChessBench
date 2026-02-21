@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from src.analysis.elo_estimator import compute_filtered_cpl, estimate_elo_from_cpl
+from src.analysis.elo_estimator import (
+    combine_weighted_elos,
+    compute_filtered_cpl,
+    confidence_from_filtered_result,
+    estimate_elo_from_cpl,
+)
 
 
 def test_estimate_elo_uses_default_anchor_without_shift() -> None:
@@ -36,10 +41,11 @@ def test_compute_filtered_cpl_uses_filtered_subset_when_enough_moves() -> None:
 
     assert result.low_confidence is False
     assert result.qualifying_moves == 5
+    assert result.has_estimate is True
     assert result.avg_cpl == 30.0
 
 
-def test_compute_filtered_cpl_falls_back_when_too_few_qualifying_moves() -> None:
+def test_compute_filtered_cpl_marks_low_confidence_when_too_few_moves() -> None:
     moves = [
         {"color": "black", "eval_before_cp": 900, "centipawn_loss": 100},
         {"color": "black", "eval_before_cp": -850, "centipawn_loss": 200},
@@ -50,5 +56,62 @@ def test_compute_filtered_cpl_falls_back_when_too_few_qualifying_moves() -> None
     result = compute_filtered_cpl(moves, "black", eval_cap=500)
 
     assert result.low_confidence is True
-    assert result.qualifying_moves == 4
-    assert result.avg_cpl == 87.5
+    assert result.qualifying_moves == 1
+    assert result.has_estimate is True
+    assert result.avg_cpl == 20.0
+
+
+def test_compute_filtered_cpl_returns_no_estimate_when_no_qualifying_moves() -> None:
+    moves = [
+        {"color": "black", "eval_before_cp": 900, "centipawn_loss": 100},
+        {"color": "black", "eval_before_cp": -850, "centipawn_loss": 200},
+    ]
+
+    result = compute_filtered_cpl(moves, "black", eval_cap=500)
+
+    assert result.low_confidence is True
+    assert result.qualifying_moves == 0
+    assert result.has_estimate is False
+    assert result.avg_cpl == 0.0
+
+
+def test_confidence_from_filtered_result() -> None:
+    no_estimate = compute_filtered_cpl(
+        [{"color": "white", "eval_before_cp": 700, "centipawn_loss": 15}],
+        "white",
+        eval_cap=500,
+    )
+    low = compute_filtered_cpl(
+        [{"color": "white", "eval_before_cp": 100, "centipawn_loss": 15}],
+        "white",
+        eval_cap=500,
+    )
+    high = compute_filtered_cpl(
+        [
+            {"color": "white", "eval_before_cp": 0, "centipawn_loss": 10},
+            {"color": "white", "eval_before_cp": 10, "centipawn_loss": 10},
+            {"color": "white", "eval_before_cp": 20, "centipawn_loss": 10},
+            {"color": "white", "eval_before_cp": 30, "centipawn_loss": 10},
+            {"color": "white", "eval_before_cp": 40, "centipawn_loss": 10},
+        ],
+        "white",
+        eval_cap=500,
+    )
+
+    assert confidence_from_filtered_result(no_estimate) == "none"
+    assert confidence_from_filtered_result(low) == "low"
+    assert confidence_from_filtered_result(high) == "high"
+
+
+def test_combine_weighted_elos() -> None:
+    combined, conf = combine_weighted_elos(white_elo=1500, white_confidence="high", black_elo=1300, black_confidence="low")
+    assert combined == 1448.1
+    assert conf == "low"
+
+    combined, conf = combine_weighted_elos(white_elo=1500, white_confidence="high", black_elo=1300, black_confidence="high")
+    assert combined == 1400.0
+    assert conf == "high"
+
+    combined, conf = combine_weighted_elos(white_elo=None, white_confidence="none", black_elo=None, black_confidence="none")
+    assert combined == 0.0
+    assert conf == "none"

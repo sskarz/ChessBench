@@ -11,6 +11,11 @@ class StandingsEntry(BaseModel):
     elo: float
     elo_white: float
     elo_black: float
+    elo_confidence: Literal["none", "low", "high"] = "none"
+    elo_white_confidence: Literal["none", "low", "high"] = "none"
+    elo_black_confidence: Literal["none", "low", "high"] = "none"
+    elo_white_qualifying_moves: int = 0
+    elo_black_qualifying_moves: int = 0
     wins: int
     losses: int
     draws: int
@@ -89,6 +94,11 @@ class PlayerStats(BaseModel):
     elo: float
     elo_white: float
     elo_black: float
+    elo_confidence: Literal["none", "low", "high"] = "none"
+    elo_white_confidence: Literal["none", "low", "high"] = "none"
+    elo_black_confidence: Literal["none", "low", "high"] = "none"
+    elo_white_qualifying_moves: int = 0
+    elo_black_qualifying_moves: int = 0
     games_played: int
     wins: int
     losses: int

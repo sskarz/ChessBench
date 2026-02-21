@@ -33,6 +33,11 @@ export interface StandingsEntry {
   elo: number;
   elo_white: number;
   elo_black: number;
+  elo_confidence: "none" | "low" | "high";
+  elo_white_confidence: "none" | "low" | "high";
+  elo_black_confidence: "none" | "low" | "high";
+  elo_white_qualifying_moves: number;
+  elo_black_qualifying_moves: number;
   wins: number;
   losses: number;
   draws: number;
@@ -111,6 +116,11 @@ export interface PlayerStats {
   elo: number;
   elo_white: number;
   elo_black: number;
+  elo_confidence: "none" | "low" | "high";
+  elo_white_confidence: "none" | "low" | "high";
+  elo_black_confidence: "none" | "low" | "high";
+  elo_white_qualifying_moves: number;
+  elo_black_qualifying_moves: number;
   games_played: number;
   wins: number;
   losses: number;

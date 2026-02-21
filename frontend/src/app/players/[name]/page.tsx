@@ -61,11 +61,17 @@ export default function PlayerPage({ params }: { params: Promise<{ name: string 
   }
 
   const fmtElo = (v: number) => (v === 0 ? "--" : Math.round(v).toString());
+  const fmtConf = (v: "none" | "low" | "high") => (v === "high" ? "High" : v === "low" ? "Low" : "--");
 
   const statCards: { label: string; value: string; color?: string }[] = [
     { label: "Elo", value: fmtElo(stats.elo) },
+    { label: "Elo Conf", value: fmtConf(stats.elo_confidence) },
     { label: "Elo (White)", value: fmtElo(stats.elo_white) },
+    { label: "W Conf", value: fmtConf(stats.elo_white_confidence) },
     { label: "Elo (Black)", value: fmtElo(stats.elo_black) },
+    { label: "B Conf", value: fmtConf(stats.elo_black_confidence) },
+    { label: "W Qualifying", value: stats.elo_white_qualifying_moves.toString() },
+    { label: "B Qualifying", value: stats.elo_black_qualifying_moves.toString() },
     { label: "Games", value: stats.games_played.toString() },
     {
       label: "Record",

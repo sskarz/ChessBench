@@ -7,6 +7,7 @@ with a secondary adjustment based on game result vs. the benchmark opponent.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 # Known CPL → Elo mapping (sorted descending by CPL for interpolation)
 _CPL_ELO_TABLE: list[tuple[float, float]] = [
@@ -22,6 +23,9 @@ _CPL_ELO_TABLE: list[tuple[float, float]] = [
 
 RESULT_ADJUSTMENT = 50  # added for win, subtracted for loss
 DEFAULT_BENCHMARK_ELO = 1320
+HIGH_CONF_WEIGHT = 1.0
+
+Confidence = Literal["none", "low", "high"]
 
 
 def _interpolate_elo(avg_cpl: float) -> float:
@@ -51,8 +55,8 @@ def estimate_elo_from_cpl(
     Args:
         avg_cpl: Filtered average centipawn loss for the player.
         game_result: "win", "loss", or "draw".
-        opponent_elo: The benchmark opponent's known Elo (unused in CPL mapping
-                      but reserved for future anchor weighting).
+        opponent_elo: The benchmark opponent's known Elo used to shift the
+                      default 1320-calibrated mapping.
 
     Returns:
         Estimated Elo, clamped to [200, 3000].
@@ -74,23 +78,26 @@ class FilteredCPLResult:
     avg_cpl: float
     qualifying_moves: int
     low_confidence: bool
+    has_estimate: bool
 
 
 def compute_filtered_cpl(
     move_analyses: list[dict],
     color: str,
     eval_cap: int = 500,
+    min_qualifying_moves: int = 5,
 ) -> FilteredCPLResult:
     """Compute average CPL, filtering out junk-time positions.
 
     Excludes moves where |eval_before_cp| > eval_cap (positions already
-    decided). Falls back to unfiltered CPL if fewer than 5 moves qualify.
+    decided). No unfiltered fallback is used.
 
     Args:
         move_analyses: List of MoveAnalysis-like dicts with at least
                        'color', 'eval_before_cp', and 'centipawn_loss'.
         color: "white" or "black" — only include moves by this player.
         eval_cap: Maximum |eval_before_cp| to include in the average.
+        min_qualifying_moves: Moves needed for high confidence.
 
     Returns:
         FilteredCPLResult with average CPL, qualifying move count,
@@ -98,7 +105,12 @@ def compute_filtered_cpl(
     """
     player_moves = [m for m in move_analyses if m["color"] == color]
     if not player_moves:
-        return FilteredCPLResult(avg_cpl=0.0, qualifying_moves=0, low_confidence=True)
+        return FilteredCPLResult(
+            avg_cpl=0.0,
+            qualifying_moves=0,
+            low_confidence=True,
+            has_estimate=False,
+        )
 
     filtered = [
         m for m in player_moves
@@ -106,18 +118,61 @@ def compute_filtered_cpl(
         and abs(m["eval_before_cp"]) <= eval_cap
     ]
 
-    if len(filtered) >= 5:
-        total_cpl = sum(m["centipawn_loss"] for m in filtered)
+    if not filtered:
         return FilteredCPLResult(
-            avg_cpl=total_cpl / len(filtered),
-            qualifying_moves=len(filtered),
-            low_confidence=False,
+            avg_cpl=0.0,
+            qualifying_moves=0,
+            low_confidence=True,
+            has_estimate=False,
         )
 
-    # Fall back to unfiltered
-    total_cpl = sum(m["centipawn_loss"] for m in player_moves)
+    total_cpl = sum(m["centipawn_loss"] for m in filtered)
     return FilteredCPLResult(
-        avg_cpl=total_cpl / len(player_moves),
-        qualifying_moves=len(player_moves),
-        low_confidence=True,
+        avg_cpl=total_cpl / len(filtered),
+        qualifying_moves=len(filtered),
+        low_confidence=len(filtered) < min_qualifying_moves,
+        has_estimate=True,
     )
+
+
+def confidence_from_filtered_result(result: FilteredCPLResult) -> Confidence:
+    if not result.has_estimate:
+        return "none"
+    if result.low_confidence:
+        return "low"
+    return "high"
+
+
+def combine_weighted_elos(
+    white_elo: float | None,
+    white_confidence: Confidence,
+    black_elo: float | None,
+    black_confidence: Confidence,
+    low_conf_weight: float = 0.35,
+) -> tuple[float, Confidence]:
+    """Combine per-color Elo using confidence-based weights."""
+    weight_map: dict[Confidence, float] = {
+        "none": 0.0,
+        "low": max(0.0, float(low_conf_weight)),
+        "high": HIGH_CONF_WEIGHT,
+    }
+
+    weights: list[tuple[float, float]] = []
+    if white_elo is not None:
+        w = weight_map[white_confidence]
+        if w > 0:
+            weights.append((white_elo, w))
+    if black_elo is not None:
+        w = weight_map[black_confidence]
+        if w > 0:
+            weights.append((black_elo, w))
+
+    if not weights:
+        return 0.0, "none"
+
+    total_weight = sum(w for _, w in weights)
+    combined = round(sum(elo * w for elo, w in weights) / total_weight, 1)
+
+    if white_confidence == "high" and black_confidence == "high":
+        return combined, "high"
+    return combined, "low"

@@ -22,6 +22,11 @@ def _migrate_schema(eng) -> None:
         ("tournament", "player_names_json", "TEXT DEFAULT '[]'"),
         ("tournament", "completed_at", "TEXT"),
         ("tournament", "error_message", "TEXT"),
+        ("player", "elo_confidence", "TEXT DEFAULT 'none'"),
+        ("player", "elo_white_confidence", "TEXT DEFAULT 'none'"),
+        ("player", "elo_black_confidence", "TEXT DEFAULT 'none'"),
+        ("player", "elo_white_qualifying_moves", "INTEGER DEFAULT 0"),
+        ("player", "elo_black_qualifying_moves", "INTEGER DEFAULT 0"),
     ]
     with eng.connect() as conn:
         for table, column, col_type in migrations:

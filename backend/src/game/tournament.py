@@ -11,7 +11,12 @@ from typing import Any
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
-from src.analysis.elo_estimator import compute_filtered_cpl, estimate_elo_from_cpl
+from src.analysis.elo_estimator import (
+    combine_weighted_elos,
+    compute_filtered_cpl,
+    confidence_from_filtered_result,
+    estimate_elo_from_cpl,
+)
 from src.config import Settings
 from src.db.models import Game, MoveAnalysis, Player, Tournament
 from src.game.orchestrator import GameOrchestrator, LiveMoveEvent, ResumeState
@@ -221,6 +226,11 @@ class TournamentManager:
                     row.elo_white = 0.0
                     row.elo_black = 0.0
                     row.elo = 0.0
+                    row.elo_confidence = "none"
+                    row.elo_white_confidence = "none"
+                    row.elo_black_confidence = "none"
+                    row.elo_white_qualifying_moves = 0
+                    row.elo_black_qualifying_moves = 0
                 session.commit()
 
             player_names = [p.get_name() for p in self.players]
@@ -394,36 +404,77 @@ class TournamentManager:
         ]
 
         benchmark_elo = self.settings.benchmark_stockfish_elo
+        eval_cap = self.settings.benchmark_eval_cap
+        min_qualifying_moves = self.settings.benchmark_min_qualifying_moves
+        low_conf_weight = self.settings.benchmark_low_conf_weight
 
         if not white_is_engine:
-            cpl_result = compute_filtered_cpl(move_dicts, "white")
+            cpl_result = compute_filtered_cpl(
+                move_dicts,
+                "white",
+                eval_cap=eval_cap,
+                min_qualifying_moves=min_qualifying_moves,
+            )
+            white_row.elo_white_qualifying_moves = cpl_result.qualifying_moves
+            white_row.elo_white_confidence = confidence_from_filtered_result(cpl_result)
             if result == "1-0":
                 llm_result = "win"
             elif result == "0-1":
                 llm_result = "loss"
             else:
                 llm_result = "draw"
-            estimated = estimate_elo_from_cpl(cpl_result.avg_cpl, llm_result, benchmark_elo)
-            white_row.elo_white = estimated
-            if white_row.elo_black > 0:
-                white_row.elo = round((white_row.elo_white + white_row.elo_black) / 2, 1)
+            if cpl_result.has_estimate:
+                estimated = estimate_elo_from_cpl(cpl_result.avg_cpl, llm_result, benchmark_elo)
+                white_row.elo_white = estimated
             else:
-                white_row.elo = estimated
+                white_row.elo_white = 0.0
 
         if not black_is_engine:
-            cpl_result = compute_filtered_cpl(move_dicts, "black")
+            cpl_result = compute_filtered_cpl(
+                move_dicts,
+                "black",
+                eval_cap=eval_cap,
+                min_qualifying_moves=min_qualifying_moves,
+            )
+            black_row.elo_black_qualifying_moves = cpl_result.qualifying_moves
+            black_row.elo_black_confidence = confidence_from_filtered_result(cpl_result)
             if result == "0-1":
                 llm_result = "win"
             elif result == "1-0":
                 llm_result = "loss"
             else:
                 llm_result = "draw"
-            estimated = estimate_elo_from_cpl(cpl_result.avg_cpl, llm_result, benchmark_elo)
-            black_row.elo_black = estimated
-            if black_row.elo_white > 0:
-                black_row.elo = round((black_row.elo_white + black_row.elo_black) / 2, 1)
+            if cpl_result.has_estimate:
+                estimated = estimate_elo_from_cpl(cpl_result.avg_cpl, llm_result, benchmark_elo)
+                black_row.elo_black = estimated
             else:
-                black_row.elo = estimated
+                black_row.elo_black = 0.0
+
+        if not white_is_engine:
+            white_side = white_row.elo_white if white_row.elo_white_confidence != "none" else None
+            black_side = white_row.elo_black if white_row.elo_black_confidence != "none" else None
+            combined_elo, combined_conf = combine_weighted_elos(
+                white_elo=white_side,
+                white_confidence=white_row.elo_white_confidence,
+                black_elo=black_side,
+                black_confidence=white_row.elo_black_confidence,
+                low_conf_weight=low_conf_weight,
+            )
+            white_row.elo = combined_elo
+            white_row.elo_confidence = combined_conf
+
+        if not black_is_engine:
+            white_side = black_row.elo_white if black_row.elo_white_confidence != "none" else None
+            black_side = black_row.elo_black if black_row.elo_black_confidence != "none" else None
+            combined_elo, combined_conf = combine_weighted_elos(
+                white_elo=white_side,
+                white_confidence=black_row.elo_white_confidence,
+                black_elo=black_side,
+                black_confidence=black_row.elo_black_confidence,
+                low_conf_weight=low_conf_weight,
+            )
+            black_row.elo = combined_elo
+            black_row.elo_confidence = combined_conf
 
     async def resume_round_robin(self, tournament_id: int) -> dict[str, Any]:
         """Resume an interrupted tournament from its last known state."""
@@ -941,6 +992,11 @@ class TournamentManager:
                         "elo": round(player.elo, 1),
                         "elo_white": round(player.elo_white, 1),
                         "elo_black": round(player.elo_black, 1),
+                        "elo_confidence": player.elo_confidence,
+                        "elo_white_confidence": player.elo_white_confidence,
+                        "elo_black_confidence": player.elo_black_confidence,
+                        "elo_white_qualifying_moves": player.elo_white_qualifying_moves,
+                        "elo_black_qualifying_moves": player.elo_black_qualifying_moves,
                         "wins": player.wins,
                         "losses": player.losses,
                         "draws": player.draws,

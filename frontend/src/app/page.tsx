@@ -7,11 +7,10 @@ import { startTournament, resumeTournament, startBenchmark } from "@/lib/api";
 import Navigation from "@/components/Navigation";
 import LiveBoard from "@/components/LiveBoard";
 import EvalBar from "@/components/EvalBar";
-import EvalChart from "@/components/EvalChart";
 import PlayerCard from "@/components/PlayerCard";
-import MoveList from "@/components/MoveList";
 import Scoreboard from "@/components/Scoreboard";
 import GameMiniCard from "@/components/GameMiniCard";
+import GameDetailPanel from "@/components/GameDetailPanel";
 
 export default function Home() {
   const {
@@ -73,12 +72,21 @@ export default function Home() {
     }
   }
 
-  // Active games for the mini-card grid
-  const activeGames = useMemo(
-    () => Object.values(games).filter((g) => g.isActive),
+  // All games in state (active + recently ended) for the grid
+  const allGames = useMemo(
+    () => Object.values(games),
     [games],
   );
-  const hasMultipleGames = activeGames.length > 1;
+  const activeGames = useMemo(
+    () => allGames.filter((g) => g.isActive),
+    [allGames],
+  );
+  const hasMultipleGames = allGames.length > 1;
+
+  // Grid column class based on game count
+  const gridColsClass = allGames.length >= 5
+    ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
+    : "grid-cols-1 sm:grid-cols-2";
 
   // Derive data from selected game
   const sg = selectedGame;
@@ -88,12 +96,6 @@ export default function Home() {
   const evalCp = lastMove?.eval_cp ?? null;
   const evalMate = lastMove?.eval_mate ?? null;
   const winPctWhite = lastMove?.win_pct_white ?? 50;
-
-  const evalChartData = moves.map((m) => ({
-    move_number: m.move_number,
-    eval_cp: m.eval_cp,
-    color: m.color,
-  }));
 
   const whiteMoves = moves.filter((m) => m.color === "white");
   const blackMoves = moves.filter((m) => m.color === "black");
@@ -167,105 +169,37 @@ export default function Home() {
           </motion.div>
         )}
 
-        {/* Multi-game grid + detail layout */}
+        {/* Multi-game: responsive grid + detail panel below */}
         {hasMultipleGames ? (
-          <div className="grid gap-6 lg:grid-cols-[minmax(200px,1fr)_2fr]">
-            {/* Left: Game grid */}
-            <div className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wider text-secondary">
-                Active Games
-              </p>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-1">
-                {activeGames.map((game) => (
-                  <GameMiniCard
-                    key={game.gameId}
-                    game={game}
-                    isSelected={game.gameId === selectedGameId}
-                    onClick={() => selectGame(game.gameId)}
-                  />
-                ))}
-              </div>
+          <div className="space-y-6">
+            {/* Game card grid */}
+            <div className={`grid gap-4 ${gridColsClass}`}>
+              {allGames.map((game) => (
+                <GameMiniCard
+                  key={game.gameId}
+                  game={game}
+                  isSelected={game.gameId === selectedGameId}
+                  onClick={() => selectGame(game.gameId)}
+                />
+              ))}
             </div>
 
-            {/* Right: Selected game detail */}
+            {/* Selected game detail panel */}
             {sg && (
-              <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-                {/* Board column */}
-                <div className="flex gap-2">
-                  <div className="hidden sm:block" style={{ height: "100%" }}>
-                    <EvalBar evalCp={evalCp} winPctWhite={winPctWhite} evalMate={evalMate} />
-                  </div>
-                  <div className="flex-1 space-y-3">
-                    <PlayerCard
-                      name={sg.black}
-                      color="black"
-                      accuracy={blackAccuracy}
-                      avgCpl={blackAvgCpl}
-                      isActive={sg.isActive && lastMove?.color === "white"}
-                      thinkTimeMs={blackMoves.length > 0 ? blackMoves[blackMoves.length - 1].think_time_ms : undefined}
-                    />
-                    <LiveBoard fen={sg.fen} lastMoveUci={lastMoveUci} />
-                    <PlayerCard
-                      name={sg.white}
-                      color="white"
-                      accuracy={whiteAccuracy}
-                      avgCpl={whiteAvgCpl}
-                      isActive={sg.isActive && lastMove?.color === "black"}
-                      thinkTimeMs={whiteMoves.length > 0 ? whiteMoves[whiteMoves.length - 1].think_time_ms : undefined}
-                    />
-                  </div>
-                </div>
-
-                {/* Info panels */}
-                <div className="space-y-4">
-                  {lastMove && (
-                    <motion.div
-                      key={`${sg.gameId}-${moves.length}`}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      className="rounded-lg border border-border bg-surface p-3"
-                    >
-                      <div className="flex items-center justify-between text-xs text-secondary mb-1">
-                        <span>Last move</span>
-                        <span className="font-[family-name:var(--font-mono)]">
-                          {lastMove.eval_cp != null
-                            ? `${lastMove.eval_cp >= 0 ? "+" : ""}${(lastMove.eval_cp / 100).toFixed(2)}`
-                            : lastMove.eval_mate != null
-                              ? `M${Math.abs(lastMove.eval_mate)}`
-                              : ""}
-                        </span>
-                      </div>
-                      <p className="font-[family-name:var(--font-mono)] text-sm">
-                        <span className="text-accent">{lastMove.move_san}</span>
-                        <span
-                          className="ml-2 text-xs"
-                          style={{
-                            color:
-                              lastMove.classification in
-                              { best: 1, excellent: 1, good: 1, inaccuracy: 1, mistake: 1, blunder: 1 }
-                                ? `var(--clr-${lastMove.classification})`
-                                : undefined,
-                          }}
-                        >
-                          {lastMove.classification}
-                        </span>
-                        {lastMove.best_move_san && lastMove.classification !== "best" && (
-                          <span className="ml-2 text-xs text-muted">
-                            best: {lastMove.best_move_san}
-                          </span>
-                        )}
-                      </p>
-                    </motion.div>
+              <motion.div
+                key={sg.gameId}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="rounded-xl border border-border bg-surface/50 p-4"
+              >
+                <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-secondary">
+                  {sg.white} vs {sg.black}
+                  {!sg.isActive && sg.result && (
+                    <span className="ml-2 text-foreground">{sg.result}</span>
                   )}
-                  <div className="rounded-lg border border-border bg-surface p-3">
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-secondary">
-                      Evaluation
-                    </p>
-                    <EvalChart moves={evalChartData} height={120} />
-                  </div>
-                  <MoveList moves={moves} />
-                </div>
-              </div>
+                </p>
+                <GameDetailPanel gameId={sg.gameId} moves={sg.moves} />
+              </motion.div>
             )}
           </div>
         ) : (
@@ -365,55 +299,10 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Right column: info panels */}
-            <div className="space-y-4">
-              {lastMove && (
-                <motion.div
-                  key={`${sg?.gameId}-${moves.length}`}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="rounded-lg border border-border bg-surface p-3"
-                >
-                  <div className="flex items-center justify-between text-xs text-secondary mb-1">
-                    <span>Last move</span>
-                    <span className="font-[family-name:var(--font-mono)]">
-                      {lastMove.eval_cp != null
-                        ? `${lastMove.eval_cp >= 0 ? "+" : ""}${(lastMove.eval_cp / 100).toFixed(2)}`
-                        : lastMove.eval_mate != null
-                          ? `M${Math.abs(lastMove.eval_mate)}`
-                          : ""}
-                    </span>
-                  </div>
-                  <p className="font-[family-name:var(--font-mono)] text-sm">
-                    <span className="text-accent">{lastMove.move_san}</span>
-                    <span
-                      className="ml-2 text-xs"
-                      style={{
-                        color:
-                          lastMove.classification in
-                          { best: 1, excellent: 1, good: 1, inaccuracy: 1, mistake: 1, blunder: 1 }
-                            ? `var(--clr-${lastMove.classification})`
-                            : undefined,
-                      }}
-                    >
-                      {lastMove.classification}
-                    </span>
-                    {lastMove.best_move_san && lastMove.classification !== "best" && (
-                      <span className="ml-2 text-xs text-muted">
-                        best: {lastMove.best_move_san}
-                      </span>
-                    )}
-                  </p>
-                </motion.div>
-              )}
-              <div className="rounded-lg border border-border bg-surface p-3">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-secondary">
-                  Evaluation
-                </p>
-                <EvalChart moves={evalChartData} height={120} />
-              </div>
-              <MoveList moves={moves} />
-            </div>
+            {/* Right column: info panels (single game) */}
+            {sg && (
+              <GameDetailPanel gameId={sg.gameId} moves={moves} vertical />
+            )}
           </div>
         )}
 

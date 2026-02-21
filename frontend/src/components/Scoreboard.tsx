@@ -31,19 +31,23 @@ export default function Scoreboard({ standings }: ScoreboardProps) {
     return sortAsc ? cmp : -cmp;
   });
 
-  const fmtElo = (v: number) => (v === 0 ? "--" : Math.round(v).toString());
+  const fmtElo = (v: number | string) => (Number(v) === 0 ? "--" : Math.round(Number(v)).toString());
+  const fmtConf = (v: string) => (v === "high" ? "H" : v === "low" ? "L" : "--");
 
-  const columns: { key: SortKey; label: string; fmt?: (v: number) => string; align?: string }[] = [
+  const columns: { key: SortKey; label: string; fmt?: (v: number | string) => string; align?: string }[] = [
     { key: "elo", label: "Elo", fmt: fmtElo },
+    { key: "elo_confidence", label: "Conf", fmt: (v) => fmtConf(String(v)) },
     { key: "elo_white", label: "W Elo", fmt: fmtElo },
+    { key: "elo_white_confidence", label: "W C", fmt: (v) => fmtConf(String(v)) },
     { key: "elo_black", label: "B Elo", fmt: fmtElo },
+    { key: "elo_black_confidence", label: "B C", fmt: (v) => fmtConf(String(v)) },
     { key: "wins", label: "W" },
     { key: "losses", label: "L" },
     { key: "draws", label: "D" },
-    { key: "avg_accuracy", label: "Acc%", fmt: (v) => v.toFixed(1) },
-    { key: "avg_cpl", label: "CPL", fmt: (v) => v.toFixed(1) },
-    { key: "blunder_rate", label: "Blunders", fmt: (v) => v.toFixed(2) },
-    { key: "total_cost_usd", label: "Cost", fmt: (v) => `$${v.toFixed(4)}` },
+    { key: "avg_accuracy", label: "Acc%", fmt: (v) => Number(v).toFixed(1) },
+    { key: "avg_cpl", label: "CPL", fmt: (v) => Number(v).toFixed(1) },
+    { key: "blunder_rate", label: "Blunders", fmt: (v) => Number(v).toFixed(2) },
+    { key: "total_cost_usd", label: "Cost", fmt: (v) => `$${Number(v).toFixed(4)}` },
   ];
 
   if (standings.length === 0) {
@@ -101,7 +105,7 @@ export default function Scoreboard({ standings }: ScoreboardProps) {
                   className="px-3 py-2 font-[family-name:var(--font-mono)] text-xs"
                 >
                   {col.fmt
-                    ? col.fmt(entry[col.key] as number)
+                    ? col.fmt(entry[col.key] as number | string)
                     : String(entry[col.key])}
                 </td>
               ))}

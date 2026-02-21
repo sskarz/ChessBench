@@ -23,7 +23,10 @@ After a game completes, the system computes the LLM's average CPL with **junk-ti
 2. **Exclude** any move where `|eval_before_cp| > 500` (positions already decisively won or lost — moves here don't reflect true skill)
 3. Average the remaining centipawn loss values
 
-If fewer than 5 moves survive the filter (e.g., a very short game), the system falls back to unfiltered CPL and flags the result as `low_confidence`.
+If fewer than 5 moves survive the filter (e.g., a very short game), the system **does not** fall back to unfiltered CPL. Instead:
+
+- if at least 1 move survives, Elo is estimated from the filtered subset and flagged as `low_confidence`
+- if 0 moves survive, that side receives no per-color estimate for that game (`none` confidence)
 
 **Why filter?** In lost positions (e.g., down a queen), even random moves have high CPL that doesn't reflect the player's actual ability. Filtering these out produces a more accurate skill estimate.
 
@@ -79,13 +82,23 @@ The system stores three Elo values per player:
 
 - **Elo (White)** — estimated from the game where the LLM played white
 - **Elo (Black)** — estimated from the game where the LLM played black
-- **Elo (Combined)** — average of white and black Elo, once both games are complete
+- **Elo (Combined)** — confidence-weighted combination of white and black Elo, once both games are complete
 
 Per-color Elo is useful because LLMs can have significant asymmetry — some handle the initiative of white better, while others defend more accurately as black.
 
-If only one game has completed so far, the combined Elo equals that single result until the other finishes.
+If only one side has an estimate so far, the combined Elo equals that side's value.
 
 At benchmark start, per-color/combined benchmark Elo fields are reset for participating LLM players so each run is self-contained and does not mix with stale values from prior runs.
+
+### Confidence-weighted combined Elo
+
+Combined Elo is not a plain average. It uses confidence weights:
+
+- high-confidence side: weight `1.0`
+- low-confidence side: weight `0.35`
+- no estimate (`none`): weight `0`
+
+This prevents one noisy side estimate from dominating combined Elo.
 
 ## Worked Example
 

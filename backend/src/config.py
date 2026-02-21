@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     llm_reasoning_effort: str = "none"
 
     benchmark_stockfish_elo: int = 1320
+    benchmark_eval_cap: int = 500
+    benchmark_min_qualifying_moves: int = 5
+    benchmark_low_conf_weight: float = 0.35
     max_concurrent_games: int = 0  # 0 = auto (floor(N_players / 2))
 
     database_url: str = "sqlite:///./arena.db"
