@@ -6,7 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
@@ -120,9 +120,19 @@ app.add_middleware(
 )
 
 
-def _standings_from_db(session: Session) -> list[StandingsEntry]:
+def _standings_from_db(
+    session: Session,
+    sort_by: Literal["tournament", "benchmark"] = "tournament",
+) -> list[StandingsEntry]:
     players = session.exec(select(Player)).all()
     standings: list[StandingsEntry] = []
+
+    # Pre-load tournament IDs by format for blunder rate separation
+    benchmark_tournament_ids: set[int] = set()
+    all_tournaments = session.exec(select(Tournament)).all()
+    for t in all_tournaments:
+        if t.id is not None and t.format == "benchmark":
+            benchmark_tournament_ids.add(t.id)
 
     for player in players:
         # Hide benchmark anchor rows from standings.
@@ -135,11 +145,19 @@ def _standings_from_db(session: Session) -> list[StandingsEntry]:
                 Game.status == "completed",
             )
         ).all()
-        blunders = sum(
-            game.white_blunders if game.white_id == player.id else game.black_blunders
-            for game in games
-        )
-        blunder_rate = blunders / max(len(games), 1)
+
+        tournament_blunders = 0
+        tournament_game_count = 0
+        for game in games:
+            b = game.white_blunders if game.white_id == player.id else game.black_blunders
+            if game.tournament_id is not None and game.tournament_id in benchmark_tournament_ids:
+                continue
+            else:
+                tournament_blunders += b
+                tournament_game_count += 1
+
+        blunder_rate = tournament_blunders / max(tournament_game_count, 1)
+        benchmark_blunder_rate = player.benchmark_total_blunders / max(player.benchmark_games_played, 1)
 
         standings.append(
             StandingsEntry(
@@ -159,10 +177,19 @@ def _standings_from_db(session: Session) -> list[StandingsEntry]:
                 avg_cpl=round(player.avg_cpl, 1),
                 blunder_rate=round(blunder_rate, 2),
                 total_cost_usd=round(player.total_cost_usd, 4),
+                benchmark_elo=round(player.benchmark_elo, 1),
+                benchmark_wins=player.benchmark_wins,
+                benchmark_losses=player.benchmark_losses,
+                benchmark_draws=player.benchmark_draws,
+                benchmark_avg_accuracy=round(player.benchmark_avg_accuracy, 1),
+                benchmark_avg_cpl=round(player.benchmark_avg_cpl, 1),
+                benchmark_blunder_rate=round(benchmark_blunder_rate, 2),
+                benchmark_total_cost_usd=round(player.benchmark_total_cost_usd, 4),
             )
         )
 
-    standings.sort(key=lambda row: (-row.elo, row.name))
+    key = "elo" if sort_by == "tournament" else "benchmark_elo"
+    standings.sort(key=lambda row: (-getattr(row, key), row.name))
     return standings
 
 
@@ -607,8 +634,11 @@ async def start_benchmark() -> TournamentStartResponse:
 
 
 @app.get("/api/standings", response_model=list[StandingsEntry])
-async def get_standings(session: Session = Depends(get_session)) -> list[StandingsEntry]:
-    return _standings_from_db(session)
+async def get_standings(
+    mode: Literal["tournament", "benchmark"] = "tournament",
+    session: Session = Depends(get_session),
+) -> list[StandingsEntry]:
+    return _standings_from_db(session, sort_by=mode)
 
 
 @app.get("/api/games", response_model=GameListResponse)
@@ -724,17 +754,32 @@ async def get_player_stats(player_name: str, session: Session = Depends(get_sess
     if player is None:
         raise HTTPException(status_code=404, detail="Player not found")
 
+    # Pre-load benchmark tournament IDs for blunder rate separation
+    benchmark_tournament_ids: set[int] = set()
+    all_tournaments = session.exec(select(Tournament)).all()
+    for t in all_tournaments:
+        if t.id is not None and t.format == "benchmark":
+            benchmark_tournament_ids.add(t.id)
+
     games = session.exec(
         select(Game).where(
             or_(Game.white_id == player.id, Game.black_id == player.id),
             Game.status == "completed",
         )
     ).all()
-    blunders = sum(
-        game.white_blunders if game.white_id == player.id else game.black_blunders
-        for game in games
-    )
-    blunder_rate = blunders / max(len(games), 1)
+
+    tournament_blunders = 0
+    tournament_game_count = 0
+    for game in games:
+        b = game.white_blunders if game.white_id == player.id else game.black_blunders
+        if game.tournament_id is not None and game.tournament_id in benchmark_tournament_ids:
+            continue
+        else:
+            tournament_blunders += b
+            tournament_game_count += 1
+
+    blunder_rate = tournament_blunders / max(tournament_game_count, 1)
+    benchmark_blunder_rate = player.benchmark_total_blunders / max(player.benchmark_games_played, 1)
 
     return PlayerStats(
         name=player.name,
@@ -757,12 +802,24 @@ async def get_player_stats(player_name: str, session: Session = Depends(get_sess
         total_tokens=player.total_tokens,
         total_cost_usd=round(player.total_cost_usd, 4),
         blunder_rate=round(blunder_rate, 2),
+        benchmark_elo=round(player.benchmark_elo, 1),
+        benchmark_games_played=player.benchmark_games_played,
+        benchmark_wins=player.benchmark_wins,
+        benchmark_losses=player.benchmark_losses,
+        benchmark_draws=player.benchmark_draws,
+        benchmark_avg_cpl=round(player.benchmark_avg_cpl, 1),
+        benchmark_avg_accuracy=round(player.benchmark_avg_accuracy, 1),
+        benchmark_total_tokens=player.benchmark_total_tokens,
+        benchmark_total_cost_usd=round(player.benchmark_total_cost_usd, 4),
+        benchmark_blunder_rate=round(benchmark_blunder_rate, 2),
     )
 
 
 @app.get("/api/players/{player_name}/accuracy-distribution", response_model=AccuracyDistribution)
 async def get_player_accuracy_distribution(
-    player_name: str, session: Session = Depends(get_session)
+    player_name: str,
+    mode: Literal["tournament", "benchmark", "all"] = "tournament",
+    session: Session = Depends(get_session),
 ) -> AccuracyDistribution:
     player = session.exec(select(Player).where(Player.name == player_name)).first()
     if player is None:
@@ -774,6 +831,25 @@ async def get_player_accuracy_distribution(
             Game.status == "completed",
         )
     ).all()
+
+    if not games:
+        return AccuracyDistribution()
+
+    if mode != "all":
+        benchmark_tournament_ids: set[int] = set()
+        all_tournaments = session.exec(select(Tournament)).all()
+        for t in all_tournaments:
+            if t.id is not None and t.format == "benchmark":
+                benchmark_tournament_ids.add(t.id)
+
+        filtered_games: list[Game] = []
+        for g in games:
+            is_benchmark = g.tournament_id is not None and g.tournament_id in benchmark_tournament_ids
+            if mode == "benchmark" and is_benchmark:
+                filtered_games.append(g)
+            if mode == "tournament" and not is_benchmark:
+                filtered_games.append(g)
+        games = filtered_games
 
     if not games:
         return AccuracyDistribution()

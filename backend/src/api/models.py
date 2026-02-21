@@ -23,6 +23,14 @@ class StandingsEntry(BaseModel):
     avg_cpl: float
     blunder_rate: float
     total_cost_usd: float
+    benchmark_elo: float = 0.0
+    benchmark_wins: int = 0
+    benchmark_losses: int = 0
+    benchmark_draws: int = 0
+    benchmark_avg_accuracy: float = 0.0
+    benchmark_avg_cpl: float = 0.0
+    benchmark_blunder_rate: float = 0.0
+    benchmark_total_cost_usd: float = 0.0
 
 
 class GameSummary(BaseModel):
@@ -108,6 +116,16 @@ class PlayerStats(BaseModel):
     total_tokens: int
     total_cost_usd: float
     blunder_rate: float
+    benchmark_elo: float = 0.0
+    benchmark_games_played: int = 0
+    benchmark_wins: int = 0
+    benchmark_losses: int = 0
+    benchmark_draws: int = 0
+    benchmark_avg_cpl: float = 0.0
+    benchmark_avg_accuracy: float = 0.0
+    benchmark_total_tokens: int = 0
+    benchmark_total_cost_usd: float = 0.0
+    benchmark_blunder_rate: float = 0.0
 
 
 class AccuracyDistribution(BaseModel):

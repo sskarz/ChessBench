@@ -322,3 +322,179 @@ def test_standings_hide_benchmark_anchor_only(tmp_path: Path) -> None:
     app.dependency_overrides.clear()
     server.runtime.live = LiveState(updated_at=datetime.utcnow())
     server.runtime.tournament_task = None
+
+
+def test_standings_mode_and_benchmark_blunder_rate_use_separated_stats(tmp_path: Path) -> None:
+    engine = _build_test_engine(tmp_path / "standings_modes.db")
+
+    with Session(engine) as session:
+        rr = Tournament(name="RR", format="round_robin", rounds=1, status="completed")
+        bm = Tournament(name="BM", format="benchmark", rounds=1, status="completed")
+        session.add(rr)
+        session.add(bm)
+        session.commit()
+        session.refresh(rr)
+        session.refresh(bm)
+
+        alpha = Player(
+            name="Alpha",
+            provider="openrouter",
+            model_id="alpha",
+            elo=1400.0,
+            benchmark_elo=1100.0,
+            benchmark_games_played=2,
+            benchmark_total_blunders=1,
+        )
+        beta = Player(
+            name="Beta",
+            provider="openrouter",
+            model_id="beta",
+            elo=1300.0,
+            benchmark_elo=1600.0,
+            benchmark_games_played=2,
+            benchmark_total_blunders=4,
+        )
+        session.add(alpha)
+        session.add(beta)
+        session.commit()
+        session.refresh(alpha)
+        session.refresh(beta)
+
+        session.add(
+            Game(
+                id=1,
+                tournament_id=rr.id,
+                white_id=alpha.id,
+                black_id=beta.id,
+                status="completed",
+                white_blunders=2,
+                black_blunders=0,
+            )
+        )
+        session.add(
+            Game(
+                id=2,
+                tournament_id=bm.id,
+                white_id=alpha.id,
+                black_id=beta.id,
+                status="completed",
+                white_blunders=100,
+                black_blunders=50,
+            )
+        )
+        session.commit()
+
+    def _override_get_session() -> Generator[Session, None, None]:
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _override_get_session
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.tournament_task = None
+
+    with TestClient(app) as client:
+        tournament_rows = client.get("/api/standings?mode=tournament")
+        benchmark_rows = client.get("/api/standings?mode=benchmark")
+        assert tournament_rows.status_code == 200
+        assert benchmark_rows.status_code == 200
+
+        tournament = tournament_rows.json()
+        benchmark = benchmark_rows.json()
+        assert tournament[0]["name"] == "Alpha"
+        assert benchmark[0]["name"] == "Beta"
+
+        alpha_tournament = next(row for row in tournament if row["name"] == "Alpha")
+        assert alpha_tournament["blunder_rate"] == 2.0
+        assert alpha_tournament["benchmark_blunder_rate"] == 0.5
+
+    app.dependency_overrides.clear()
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.tournament_task = None
+
+
+def test_accuracy_distribution_mode_filters_tournament_vs_benchmark(tmp_path: Path) -> None:
+    engine = _build_test_engine(tmp_path / "accuracy_modes.db")
+
+    with Session(engine) as session:
+        rr = Tournament(name="RR", format="round_robin", rounds=1, status="completed")
+        bm = Tournament(name="BM", format="benchmark", rounds=1, status="completed")
+        session.add(rr)
+        session.add(bm)
+        session.commit()
+        session.refresh(rr)
+        session.refresh(bm)
+
+        alpha = Player(name="Alpha", provider="openrouter", model_id="alpha")
+        beta = Player(name="Beta", provider="openrouter", model_id="beta")
+        session.add(alpha)
+        session.add(beta)
+        session.commit()
+        session.refresh(alpha)
+        session.refresh(beta)
+
+        session.add(Game(id=1, tournament_id=rr.id, white_id=alpha.id, black_id=beta.id, status="completed"))
+        session.add(Game(id=2, tournament_id=bm.id, white_id=alpha.id, black_id=beta.id, status="completed"))
+        session.add(
+            MoveAnalysis(
+                game_id=1,
+                move_number=1,
+                color="white",
+                move_uci="e2e4",
+                move_san="e4",
+                fen_before="start",
+                fen_after="after",
+                centipawn_loss=0,
+                classification="best",
+            )
+        )
+        session.add(
+            MoveAnalysis(
+                game_id=2,
+                move_number=1,
+                color="white",
+                move_uci="d2d4",
+                move_san="d4",
+                fen_before="start",
+                fen_after="after",
+                centipawn_loss=120,
+                classification="blunder",
+            )
+        )
+        session.commit()
+
+    def _override_get_session() -> Generator[Session, None, None]:
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _override_get_session
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.tournament_task = None
+
+    with TestClient(app) as client:
+        tournament_only = client.get("/api/players/Alpha/accuracy-distribution")
+        benchmark_only = client.get("/api/players/Alpha/accuracy-distribution?mode=benchmark")
+        all_games = client.get("/api/players/Alpha/accuracy-distribution?mode=all")
+
+        assert tournament_only.status_code == 200
+        assert benchmark_only.status_code == 200
+        assert all_games.status_code == 200
+
+        tournament_payload = tournament_only.json()
+        benchmark_payload = benchmark_only.json()
+        all_payload = all_games.json()
+
+        assert tournament_payload["total_moves"] == 1
+        assert tournament_payload["best"] == 1
+        assert tournament_payload["blunder"] == 0
+
+        assert benchmark_payload["total_moves"] == 1
+        assert benchmark_payload["best"] == 0
+        assert benchmark_payload["blunder"] == 1
+
+        assert all_payload["total_moves"] == 2
+        assert all_payload["best"] == 1
+        assert all_payload["blunder"] == 1
+
+    app.dependency_overrides.clear()
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.tournament_task = None

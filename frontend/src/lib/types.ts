@@ -45,6 +45,14 @@ export interface StandingsEntry {
   avg_cpl: number;
   blunder_rate: number;
   total_cost_usd: number;
+  benchmark_elo: number;
+  benchmark_wins: number;
+  benchmark_losses: number;
+  benchmark_draws: number;
+  benchmark_avg_accuracy: number;
+  benchmark_avg_cpl: number;
+  benchmark_blunder_rate: number;
+  benchmark_total_cost_usd: number;
 }
 
 export interface GameSummary {
@@ -130,6 +138,16 @@ export interface PlayerStats {
   total_tokens: number;
   total_cost_usd: number;
   blunder_rate: number;
+  benchmark_elo: number;
+  benchmark_games_played: number;
+  benchmark_wins: number;
+  benchmark_losses: number;
+  benchmark_draws: number;
+  benchmark_avg_cpl: number;
+  benchmark_avg_accuracy: number;
+  benchmark_total_tokens: number;
+  benchmark_total_cost_usd: number;
+  benchmark_blunder_rate: number;
 }
 
 export interface AccuracyDistribution {

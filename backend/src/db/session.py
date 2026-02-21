@@ -27,6 +27,16 @@ def _migrate_schema(eng) -> None:
         ("player", "elo_black_confidence", "TEXT DEFAULT 'none'"),
         ("player", "elo_white_qualifying_moves", "INTEGER DEFAULT 0"),
         ("player", "elo_black_qualifying_moves", "INTEGER DEFAULT 0"),
+        ("player", "benchmark_elo", "REAL DEFAULT 0.0"),
+        ("player", "benchmark_games_played", "INTEGER DEFAULT 0"),
+        ("player", "benchmark_wins", "INTEGER DEFAULT 0"),
+        ("player", "benchmark_losses", "INTEGER DEFAULT 0"),
+        ("player", "benchmark_draws", "INTEGER DEFAULT 0"),
+        ("player", "benchmark_avg_cpl", "REAL DEFAULT 0.0"),
+        ("player", "benchmark_avg_accuracy", "REAL DEFAULT 0.0"),
+        ("player", "benchmark_total_tokens", "INTEGER DEFAULT 0"),
+        ("player", "benchmark_total_cost_usd", "REAL DEFAULT 0.0"),
+        ("player", "benchmark_total_blunders", "INTEGER DEFAULT 0"),
     ]
     with eng.connect() as conn:
         for table, column, col_type in migrations:

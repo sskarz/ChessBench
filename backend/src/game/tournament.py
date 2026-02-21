@@ -6,7 +6,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
@@ -225,12 +225,21 @@ class TournamentManager:
                         continue
                     row.elo_white = 0.0
                     row.elo_black = 0.0
-                    row.elo = 0.0
+                    row.benchmark_elo = 0.0
                     row.elo_confidence = "none"
                     row.elo_white_confidence = "none"
                     row.elo_black_confidence = "none"
                     row.elo_white_qualifying_moves = 0
                     row.elo_black_qualifying_moves = 0
+                    row.benchmark_games_played = 0
+                    row.benchmark_wins = 0
+                    row.benchmark_losses = 0
+                    row.benchmark_draws = 0
+                    row.benchmark_avg_cpl = 0.0
+                    row.benchmark_avg_accuracy = 0.0
+                    row.benchmark_total_tokens = 0
+                    row.benchmark_total_cost_usd = 0.0
+                    row.benchmark_total_blunders = 0
                 session.commit()
 
             player_names = [p.get_name() for p in self.players]
@@ -282,9 +291,12 @@ class TournamentManager:
                     persist_move=self._persist_move,
                     on_move_event=self._on_move_event,
                     finalize_game=self._finalize_benchmark_game,
-                    get_standings=self.get_standings,
+                    get_standings=lambda session: self.get_standings(session=session, sort_by="benchmark"),
                     abandon_game=self._abandon_game,
                 )
+                # Benchmark games are all LLM vs Stockfish — fully independent.
+                # Run all games in parallel instead of the default N_players // 2.
+                scheduler._max_concurrent = len(schedule)
                 games_played = await scheduler.run_schedule(
                     schedule=schedule,
                     pre_allocated_game_ids=pre_allocated_game_ids,
@@ -297,7 +309,7 @@ class TournamentManager:
                         t.status = "completed"
                         t.completed_at = datetime.utcnow()
                     session.commit()
-                    final_standings = self.get_standings(session=session)
+                    final_standings = self.get_standings(session=session, sort_by="benchmark")
 
             except Exception:
                 with self.session_factory() as session:
@@ -366,9 +378,9 @@ class TournamentManager:
         # Determine game result string from LLM perspective
         result = game_result["result"]
 
-        # Update LLM player stats (not Stockfish)
+        # Update LLM player stats (not Stockfish) — write to benchmark_ fields
         if not white_is_engine:
-            self._apply_player_result(
+            self._apply_benchmark_player_result(
                 player=white_row,
                 result=result,
                 as_white=True,
@@ -376,9 +388,10 @@ class TournamentManager:
                 accuracy=game_result["white_accuracy"],
                 tokens=game_result["white_tokens"],
                 cost=game_result["white_cost_usd"],
+                blunders=game_result["white_blunders"],
             )
         if not black_is_engine:
-            self._apply_player_result(
+            self._apply_benchmark_player_result(
                 player=black_row,
                 result=result,
                 as_white=False,
@@ -386,6 +399,7 @@ class TournamentManager:
                 accuracy=game_result["black_accuracy"],
                 tokens=game_result["black_tokens"],
                 cost=game_result["black_cost_usd"],
+                blunders=game_result["black_blunders"],
             )
 
         # Compute CPL-based Elo for LLM side(s)
@@ -460,7 +474,7 @@ class TournamentManager:
                 black_confidence=white_row.elo_black_confidence,
                 low_conf_weight=low_conf_weight,
             )
-            white_row.elo = combined_elo
+            white_row.benchmark_elo = combined_elo
             white_row.elo_confidence = combined_conf
 
         if not black_is_engine:
@@ -473,7 +487,7 @@ class TournamentManager:
                 black_confidence=black_row.elo_black_confidence,
                 low_conf_weight=low_conf_weight,
             )
-            black_row.elo = combined_elo
+            black_row.benchmark_elo = combined_elo
             black_row.elo_confidence = combined_conf
 
     async def resume_round_robin(self, tournament_id: int) -> dict[str, Any]:
@@ -955,19 +969,58 @@ class TournamentManager:
         player.total_tokens += int(tokens)
         player.total_cost_usd += float(cost)
 
+    def _apply_benchmark_player_result(
+        self,
+        player: Player,
+        result: str,
+        as_white: bool,
+        avg_cpl: float,
+        accuracy: float,
+        tokens: int,
+        cost: float,
+        blunders: int,
+    ) -> None:
+        old_games = player.benchmark_games_played
+        player.benchmark_games_played += 1
+
+        if result == "1/2-1/2":
+            player.benchmark_draws += 1
+        elif (result == "1-0" and as_white) or (result == "0-1" and not as_white):
+            player.benchmark_wins += 1
+        else:
+            player.benchmark_losses += 1
+
+        player.benchmark_avg_cpl = self._running_avg(player.benchmark_avg_cpl, old_games, avg_cpl)
+        player.benchmark_avg_accuracy = self._running_avg(player.benchmark_avg_accuracy, old_games, accuracy)
+        player.benchmark_total_tokens += int(tokens)
+        player.benchmark_total_cost_usd += float(cost)
+        player.benchmark_total_blunders += int(blunders)
+
     @staticmethod
     def _running_avg(current_avg: float, current_n: int, new_value: float) -> float:
         if current_n <= 0:
             return float(new_value)
         return ((current_avg * current_n) + float(new_value)) / (current_n + 1)
 
-    def get_standings(self, session: Session | None = None) -> list[dict[str, Any]]:
+    def get_standings(
+        self,
+        session: Session | None = None,
+        sort_by: Literal["tournament", "benchmark"] = "tournament",
+    ) -> list[dict[str, Any]]:
         should_close = session is None
         if session is None:
             session = self.session_factory()
 
         try:
             players = session.exec(select(Player)).all()
+
+            # Pre-load tournament IDs by format for blunder rate separation
+            benchmark_tournament_ids: set[int] = set()
+            all_tournaments = session.exec(select(Tournament)).all()
+            for t in all_tournaments:
+                if t.id is not None and t.format == "benchmark":
+                    benchmark_tournament_ids.add(t.id)
+
             standings: list[dict[str, Any]] = []
             for player in players:
                 # Hide benchmark anchor rows from standings.
@@ -980,11 +1033,20 @@ class TournamentManager:
                         Game.status == "completed",
                     )
                 ).all()
-                blunders = sum(
-                    g.white_blunders if g.white_id == player.id else g.black_blunders
-                    for g in games
-                )
-                blunder_rate = blunders / max(len(games), 1)
+
+                # Separate blunder counts by tournament format
+                tournament_blunders = 0
+                tournament_game_count = 0
+                for g in games:
+                    b = g.white_blunders if g.white_id == player.id else g.black_blunders
+                    if g.tournament_id is not None and g.tournament_id in benchmark_tournament_ids:
+                        continue
+                    else:
+                        tournament_blunders += b
+                        tournament_game_count += 1
+
+                blunder_rate = tournament_blunders / max(tournament_game_count, 1)
+                benchmark_blunder_rate = player.benchmark_total_blunders / max(player.benchmark_games_played, 1)
 
                 standings.append(
                     {
@@ -1004,10 +1066,19 @@ class TournamentManager:
                         "avg_cpl": round(player.avg_cpl, 1),
                         "blunder_rate": round(blunder_rate, 2),
                         "total_cost_usd": round(player.total_cost_usd, 4),
+                        "benchmark_elo": round(player.benchmark_elo, 1),
+                        "benchmark_wins": player.benchmark_wins,
+                        "benchmark_losses": player.benchmark_losses,
+                        "benchmark_draws": player.benchmark_draws,
+                        "benchmark_avg_accuracy": round(player.benchmark_avg_accuracy, 1),
+                        "benchmark_avg_cpl": round(player.benchmark_avg_cpl, 1),
+                        "benchmark_blunder_rate": round(benchmark_blunder_rate, 2),
+                        "benchmark_total_cost_usd": round(player.benchmark_total_cost_usd, 4),
                     }
                 )
 
-            standings.sort(key=lambda row: (-row["elo"], row["name"]))
+            key = "elo" if sort_by == "tournament" else "benchmark_elo"
+            standings.sort(key=lambda row: (-row[key], row["name"]))
             return standings
         finally:
             if should_close:

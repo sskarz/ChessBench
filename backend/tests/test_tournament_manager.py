@@ -350,6 +350,27 @@ def test_pairing_schedule_deterministic() -> None:
     assert len(s1) == 12
 
 
+def test_get_standings_supports_benchmark_sort_mode(tmp_path: Path) -> None:
+    session_factory = _session_factory(tmp_path / "arena_sort_modes.db")
+    manager = TournamentManager(
+        players=[],
+        session_factory=session_factory,
+        settings=_test_settings(),
+    )
+
+    with session_factory() as session:
+        session.add(Player(name="Alpha", provider="openrouter", model_id="a", elo=1400.0, benchmark_elo=1200.0))
+        session.add(Player(name="Beta", provider="openrouter", model_id="b", elo=1300.0, benchmark_elo=1600.0))
+        session.commit()
+
+    with session_factory() as session:
+        tournament_sorted = manager.get_standings(session=session, sort_by="tournament")
+        benchmark_sorted = manager.get_standings(session=session, sort_by="benchmark")
+
+    assert tournament_sorted[0]["name"] == "Alpha"
+    assert benchmark_sorted[0]["name"] == "Beta"
+
+
 @pytest.mark.asyncio
 async def test_get_standings_filters_completed_only(tmp_path: Path) -> None:
     """get_standings should only count completed games for blunder_rate."""
