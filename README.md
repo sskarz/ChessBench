@@ -1,6 +1,6 @@
 # ChessBench — LLM Chess Arena
 
-A platform where LLMs and engines play chess against each other with live analysis. The default roster currently includes GPT-5.2 Pro, Claude Opus 4.6, Gemini 3.1 Pro Preview, and Stockfish-800. Games are analyzed move-by-move in real time, with Elo ratings, accuracy metrics, and live spectating via WebSocket.
+A platform where LLMs and engines play chess against each other with live analysis. The default roster currently includes OpenAI GPT 5.2, Claude Sonnet 4.6, and Gemini 3 Flash Preview. Games are analyzed move-by-move in real time, with Elo ratings, accuracy metrics, and live spectating via WebSocket.
 
 ## Features
 
@@ -46,8 +46,8 @@ uv run uvicorn src.api.server:app --reload --host 0.0.0.0 --port 8000
 If `STOCKFISH_PATH` is unset, ChessBench auto-detects `stockfish` from `PATH`.
 
 Deprecated key aliases (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`) are still accepted as fallback during migration, but `OPENROUTER_API_KEY` is the canonical setting.
-`LLM_MAX_TOKENS` defaults to `1024` to leave enough headroom when reasoning tokens are consumed before the final move output.
-`LLM_REASONING_EFFORT` defaults to `low` and is applied uniformly to all LLM players for controlled comparisons.
+`LLM_MAX_TOKENS` defaults to `128` to keep move generation token usage low.
+`LLM_REASONING_EFFORT` defaults to `none` and is applied uniformly to all LLM players for controlled comparisons.
 When this global value is set, per-player `reasoning_effort` values are ignored to keep tournaments on equal footing.
 Set `OPENROUTER_HTTP_REFERER` to your app URL (for example `http://localhost:3000`) and optionally set `OPENROUTER_X_TITLE=ChessBench` for OpenRouter attribution headers.
 
@@ -79,9 +79,9 @@ Browser API/WS targets are controlled by:
 ```bash
 cd backend
 uv run python scripts/run_llm_match.py \
-  --white-model openai/gpt-5.2-pro \
-  --black-model anthropic/claude-opus-4.6 \
-  --max-tokens 1024 \
+  --white-model openai/gpt-5.2 \
+  --black-model anthropic/claude-sonnet-4.6 \
+  --max-tokens 128 \
   --reasoning-effort none
 ```
 
@@ -95,10 +95,9 @@ uv run python scripts/run_llm_match.py \
   "run_id": "abc123def4",
   "rounds": 1,
   "players": [
-    { "name": "GPT-5.2 Pro", "provider": "openrouter", "model": "openai/gpt-5.2-pro" },
-    { "name": "Claude Opus 4.6", "provider": "openrouter", "model": "anthropic/claude-opus-4.6" },
-    { "name": "Gemini 3.1 Pro Preview", "provider": "openrouter", "model": "google/gemini-3.1-pro-preview" },
-    { "name": "Stockfish-800", "provider": "engine", "model": "stockfish" }
+    { "name": "OpenAI GPT 5.2", "provider": "openrouter", "model": "openai/gpt-5.2" },
+    { "name": "Claude Sonnet 4.6", "provider": "openrouter", "model": "anthropic/claude-sonnet-4.6" },
+    { "name": "Gemini 3 Flash Preview", "provider": "openrouter", "model": "google/gemini-3-flash-preview" }
   ]
 }
 ```

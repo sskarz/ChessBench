@@ -40,29 +40,25 @@ class Settings(BaseSettings):
     max_moves_per_side: int = 150
     llm_max_retries: int = 5
     llm_temperature: float = 0.0
-    llm_max_tokens: int = 1024
-    llm_reasoning_effort: str = "low"
+    llm_max_tokens: int = 128
+    llm_reasoning_effort: str = "none"
+
+    max_concurrent_games: int = 0  # 0 = auto (floor(N_players / 2))
 
     database_url: str = "sqlite:///./arena.db"
 
     players: list[dict[str, Any]] = Field(
         default_factory=lambda: [
-            {"name": "GPT-5.2 Pro", "provider": "openrouter", "model": "openai/gpt-5.2-pro"},
+            {"name": "OpenAI GPT 5.2", "provider": "openrouter", "model": "openai/gpt-5.2"},
             {
-                "name": "Claude Opus 4.6",
+                "name": "Claude Sonnet 4.6",
                 "provider": "openrouter",
-                "model": "anthropic/claude-opus-4.6",
+                "model": "anthropic/claude-sonnet-4.6",
             },
             {
-                "name": "Gemini 3.1 Pro Preview",
+                "name": "Gemini 3 Flash Preview",
                 "provider": "openrouter",
-                "model": "google/gemini-3.1-pro-preview",
-            },
-            {
-                "name": "Stockfish-800",
-                "provider": "engine",
-                "model": "stockfish",
-                "elo_limit": 800,
+                "model": "google/gemini-3-flash-preview",
             },
         ]
     )

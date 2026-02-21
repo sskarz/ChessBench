@@ -11,8 +11,10 @@ from typing import Any
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
+from src.config import Settings
 from src.db.models import Game, MoveAnalysis, Player, Tournament
 from src.game.orchestrator import GameOrchestrator, LiveMoveEvent, ResumeState
+from src.game.scheduler import ParallelScheduler
 from src.players.base import PlayerAdapter
 
 logger = logging.getLogger(__name__)
@@ -52,18 +54,20 @@ class TournamentManager:
     def __init__(
         self,
         players: list[PlayerAdapter],
-        orchestrator: GameOrchestrator,
         session_factory: SessionFactory,
         event_callback: TournamentEventCallback | None = None,
         rounds: int = 1,
         player_descriptors: dict[str, dict[str, str]] | None = None,
+        settings: Settings | None = None,
+        orchestrator: GameOrchestrator | None = None,
     ) -> None:
         self.players = players
-        self.orchestrator = orchestrator
+        self.orchestrator = orchestrator  # kept for backward compat / tests
         self.session_factory = session_factory
         self.event_callback = event_callback
         self.rounds = rounds
         self.player_descriptors = player_descriptors or {}
+        self.settings = settings or Settings()
         self._run_lock = asyncio.Lock()
 
     async def run_round_robin(self, rounds: int | None = None) -> dict[str, Any]:
@@ -96,69 +100,48 @@ class TournamentManager:
                 session.refresh(tournament)
                 tournament_id = tournament.id
 
-            games_played = 0
+            # Pre-allocate game IDs for the entire schedule
+            pre_allocated_game_ids: dict[int, int] = {}
+            for _, pairing_idx, _, _ in schedule:
+                pre_allocated_game_ids[pairing_idx] = next_game_id
+                next_game_id += 1
 
-            try:
-                for round_number, pairing_idx, w_idx, b_idx in schedule:
+            # Create in-progress Game records for all pairings upfront
+            with self.session_factory() as session:
+                for _, pairing_idx, w_idx, b_idx in schedule:
+                    game_id = pre_allocated_game_ids[pairing_idx]
                     white = self.players[w_idx]
                     black = self.players[b_idx]
-                    game_id = next_game_id
-                    next_game_id += 1
-
-                    # Create in-progress Game record before playing
-                    with self.session_factory() as session:
-                        db_game = Game(
-                            id=game_id,
-                            tournament_id=tournament_id,
-                            white_id=player_ids[white.get_name()],
-                            black_id=player_ids[black.get_name()],
-                            status="in_progress",
-                            pairing_index=pairing_idx,
-                        )
-                        session.add(db_game)
-                        session.commit()
-
-                    await self._emit(
-                        {
-                            "type": "game_start",
-                            "game_id": game_id,
-                            "white": white.get_name(),
-                            "black": black.get_name(),
-                            "round": round_number,
-                        }
+                    db_game = Game(
+                        id=game_id,
+                        tournament_id=tournament_id,
+                        white_id=player_ids[white.get_name()],
+                        black_id=player_ids[black.get_name()],
+                        status="in_progress",
+                        pairing_index=pairing_idx,
                     )
+                    session.add(db_game)
+                session.commit()
 
-                    self.orchestrator.event_callback = self._on_move_event
-                    self.orchestrator.on_move_recorded = self._persist_move
-                    started_at = datetime.utcnow()
-                    result = await self.orchestrator.play_game(game_id=game_id, white=white, black=black)
-                    completed_at = datetime.utcnow()
-
-                    with self.session_factory() as session:
-                        self._finalize_game(
-                            session=session,
-                            game_id=game_id,
-                            game_result=result,
-                            white_player_id=player_ids[white.get_name()],
-                            black_player_id=player_ids[black.get_name()],
-                            started_at=started_at,
-                            completed_at=completed_at,
-                        )
-                        session.commit()
-                        standings = self.get_standings(session=session)
-
-                    await self._emit(
-                        {
-                            "type": "game_end",
-                            "game_id": game_id,
-                            "result": result["result"],
-                            "termination": result["termination"],
-                            "white_accuracy": result["white_accuracy"],
-                            "black_accuracy": result["black_accuracy"],
-                            "standings": standings,
-                        }
-                    )
-                    games_played += 1
+            try:
+                scheduler = ParallelScheduler(
+                    players=self.players,
+                    player_ids=player_ids,
+                    tournament_id=tournament_id,
+                    session_factory=self.session_factory,
+                    event_callback=self.event_callback,
+                    settings=self.settings,
+                    player_descriptors=self.player_descriptors,
+                    persist_move=self._persist_move,
+                    on_move_event=self._on_move_event,
+                    finalize_game=self._finalize_game,
+                    get_standings=self.get_standings,
+                    abandon_game=self._abandon_game,
+                )
+                games_played = await scheduler.run_schedule(
+                    schedule=schedule,
+                    pre_allocated_game_ids=pre_allocated_game_ids,
+                )
 
                 # Mark tournament completed
                 with self.session_factory() as session:
@@ -221,21 +204,36 @@ class TournamentManager:
                 ).all()
                 completed_indices = {g.pairing_index for g in completed_games}
 
-                in_progress_game = session.exec(
+                in_progress_games = session.exec(
                     select(Game).where(
                         Game.tournament_id == tournament_id,
                         Game.status == "in_progress",
                     )
-                ).first()
+                ).all()
 
-                in_progress_pairing_idx: int | None = None
-                resume_state: ResumeState | None = None
-                resume_game_id: int | None = None
+                existing_in_progress_ids: dict[int, int] = {}
+                resume_states: dict[int, ResumeState] = {}
+                duplicate_in_progress_ids: list[int] = []
 
-                if in_progress_game:
-                    in_progress_pairing_idx = in_progress_game.pairing_index
-                    resume_game_id = in_progress_game.id
-                    resume_state = self._build_resume_state(session, in_progress_game.id)
+                # Keep one row per pairing index; abandon stale duplicates.
+                for game in sorted(
+                    in_progress_games,
+                    key=lambda g: (g.pairing_index if g.pairing_index is not None else -1, g.id),
+                ):
+                    pairing_idx = game.pairing_index
+                    if pairing_idx is None:
+                        duplicate_in_progress_ids.append(game.id)
+                        continue
+                    if pairing_idx in existing_in_progress_ids:
+                        duplicate_in_progress_ids.append(game.id)
+                        continue
+                    existing_in_progress_ids[pairing_idx] = game.id
+                    resume_data = self._build_resume_state(session, game.id)
+                    if resume_data.moves_uci:
+                        resume_states[pairing_idx] = resume_data
+
+                for game_id in duplicate_in_progress_ids:
+                    self._abandon_game(session, game_id)
 
                 next_game_id = self._next_game_id(session)
 
@@ -246,91 +244,59 @@ class TournamentManager:
                     tournament.error_message = None
                 session.commit()
 
-            games_played = 0
+            # Pre-allocate game IDs for remaining pairings
+            pre_allocated_game_ids: dict[int, int] = {}
+            for _, pairing_idx, _, _ in schedule:
+                if pairing_idx in completed_indices:
+                    continue
+                if pairing_idx in existing_in_progress_ids:
+                    pre_allocated_game_ids[pairing_idx] = existing_in_progress_ids[pairing_idx]
+                else:
+                    pre_allocated_game_ids[pairing_idx] = next_game_id
+                    next_game_id += 1
 
-            try:
-                for round_number, pairing_idx, w_idx, b_idx in schedule:
-                    # Skip completed games
+            # Create in-progress Game records for new pairings
+            with self.session_factory() as session:
+                for _, pairing_idx, w_idx, b_idx in schedule:
                     if pairing_idx in completed_indices:
                         continue
-
+                    if pairing_idx in existing_in_progress_ids:
+                        continue  # already exists
+                    game_id = pre_allocated_game_ids[pairing_idx]
                     white = ordered_players[w_idx]
                     black = ordered_players[b_idx]
-
-                    # Resume in-progress game or create new one
-                    if pairing_idx == in_progress_pairing_idx and resume_game_id is not None:
-                        game_id = resume_game_id
-                    else:
-                        # Abandon any stale in-progress game for this pairing
-                        game_id = next_game_id
-                        next_game_id += 1
-
-                        with self.session_factory() as session:
-                            db_game = Game(
-                                id=game_id,
-                                tournament_id=tournament_id,
-                                white_id=player_ids[white.get_name()],
-                                black_id=player_ids[black.get_name()],
-                                status="in_progress",
-                                pairing_index=pairing_idx,
-                            )
-                            session.add(db_game)
-                            session.commit()
-
-                    await self._emit(
-                        {
-                            "type": "game_start",
-                            "game_id": game_id,
-                            "white": white.get_name(),
-                            "black": black.get_name(),
-                            "round": round_number,
-                        }
+                    db_game = Game(
+                        id=game_id,
+                        tournament_id=tournament_id,
+                        white_id=player_ids[white.get_name()],
+                        black_id=player_ids[black.get_name()],
+                        status="in_progress",
+                        pairing_index=pairing_idx,
                     )
+                    session.add(db_game)
+                session.commit()
 
-                    self.orchestrator.event_callback = self._on_move_event
-                    self.orchestrator.on_move_recorded = self._persist_move
-
-                    started_at = datetime.utcnow()
-                    current_resume = resume_state if pairing_idx == in_progress_pairing_idx else None
-                    result = await self.orchestrator.play_game(
-                        game_id=game_id,
-                        white=white,
-                        black=black,
-                        resume=current_resume,
-                    )
-                    completed_at = datetime.utcnow()
-
-                    with self.session_factory() as session:
-                        self._finalize_game(
-                            session=session,
-                            game_id=game_id,
-                            game_result=result,
-                            white_player_id=player_ids[white.get_name()],
-                            black_player_id=player_ids[black.get_name()],
-                            started_at=started_at,
-                            completed_at=completed_at,
-                        )
-                        session.commit()
-                        standings = self.get_standings(session=session)
-
-                    await self._emit(
-                        {
-                            "type": "game_end",
-                            "game_id": game_id,
-                            "result": result["result"],
-                            "termination": result["termination"],
-                            "white_accuracy": result["white_accuracy"],
-                            "black_accuracy": result["black_accuracy"],
-                            "standings": standings,
-                        }
-                    )
-                    games_played += 1
-
-                    # Clear resume state after first game processed
-                    if pairing_idx == in_progress_pairing_idx:
-                        in_progress_pairing_idx = None
-                        resume_state = None
-                        resume_game_id = None
+            try:
+                scheduler = ParallelScheduler(
+                    players=ordered_players,
+                    player_ids=player_ids,
+                    tournament_id=tournament_id,
+                    session_factory=self.session_factory,
+                    event_callback=self.event_callback,
+                    settings=self.settings,
+                    player_descriptors=self.player_descriptors,
+                    persist_move=self._persist_move,
+                    on_move_event=self._on_move_event,
+                    finalize_game=self._finalize_game,
+                    get_standings=self.get_standings,
+                    abandon_game=self._abandon_game,
+                )
+                games_played = await scheduler.run_schedule(
+                    schedule=schedule,
+                    pre_allocated_game_ids=pre_allocated_game_ids,
+                    completed_indices=completed_indices,
+                    resume_states=resume_states,
+                )
 
                 # Mark tournament completed
                 with self.session_factory() as session:

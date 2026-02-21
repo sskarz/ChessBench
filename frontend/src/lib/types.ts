@@ -138,6 +138,13 @@ export interface LiveStateResponse {
     round: number;
   } | null;
   last_event: Record<string, unknown> | null;
+  active_games: {
+    game_id: number;
+    white: string;
+    black: string;
+    round: number;
+  }[];
+  last_events: Record<string, Record<string, unknown>>;
   latest_standings: StandingsEntry[];
   started_at: string | null;
   updated_at: string | null;

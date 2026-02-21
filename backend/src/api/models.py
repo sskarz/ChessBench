@@ -111,6 +111,8 @@ class LiveStateResponse(BaseModel):
     run_id: str | None = None
     current_game: dict | None = None
     last_event: dict | None = None
+    active_games: list[dict] = Field(default_factory=list)
+    last_events: dict[str, dict] = Field(default_factory=dict)
     latest_standings: list[StandingsEntry] = Field(default_factory=list)
     started_at: datetime | None = None
     updated_at: datetime | None = None

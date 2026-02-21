@@ -19,15 +19,20 @@ export type TournamentStatus =
   | "error"
   | "queued";
 
-interface GameState {
-  gameId: number | null;
-  white: string | null;
-  black: string | null;
-  round: number | null;
+export interface SingleGameState {
+  gameId: number;
+  white: string;
+  black: string;
+  round: number;
   fen: string;
   moves: MoveEvent[];
-  isGameActive: boolean;
+  isActive: boolean;
   result: string | null;
+}
+
+interface MultiGameState {
+  games: Record<number, SingleGameState>;
+  selectedGameId: number | null;
   standings: StandingsEntry[];
   tournamentStatus: TournamentStatus;
   error: string | null;
@@ -36,67 +41,95 @@ interface GameState {
 type Action =
   | { type: "GAME_START"; payload: { gameId: number; white: string; black: string; round: number } }
   | { type: "MOVE"; payload: MoveEvent }
-  | { type: "GAME_END"; payload: { result: string; standings: StandingsEntry[] } }
+  | { type: "GAME_END"; payload: { gameId: number; result: string; standings: StandingsEntry[] } }
   | { type: "TOURNAMENT_COMPLETE"; payload: { standings: StandingsEntry[] } }
   | { type: "TOURNAMENT_ERROR"; payload: { error: string } }
   | { type: "TOURNAMENT_QUEUED" }
-  | { type: "HYDRATE"; payload: Partial<GameState> }
+  | { type: "SELECT_GAME"; payload: { gameId: number } }
+  | { type: "HYDRATE"; payload: Partial<MultiGameState> }
   | { type: "SET_STANDINGS"; payload: StandingsEntry[] };
 
-const initialState: GameState = {
-  gameId: null,
-  white: null,
-  black: null,
-  round: null,
-  fen: STARTING_FEN,
-  moves: [],
-  isGameActive: false,
-  result: null,
+const initialState: MultiGameState = {
+  games: {},
+  selectedGameId: null,
   standings: [],
   tournamentStatus: "idle",
   error: null,
 };
 
-function reducer(state: GameState, action: Action): GameState {
+function reducer(state: MultiGameState, action: Action): MultiGameState {
   switch (action.type) {
-    case "GAME_START":
-      return {
-        ...state,
-        gameId: action.payload.gameId,
-        white: action.payload.white,
-        black: action.payload.black,
-        round: action.payload.round,
+    case "GAME_START": {
+      const { gameId, white, black, round } = action.payload;
+      const newGame: SingleGameState = {
+        gameId,
+        white,
+        black,
+        round,
         fen: STARTING_FEN,
         moves: [],
-        isGameActive: true,
+        isActive: true,
         result: null,
+      };
+      const games = { ...state.games, [gameId]: newGame };
+      // Auto-select if nothing selected
+      const selectedGameId = state.selectedGameId ?? gameId;
+      return {
+        ...state,
+        games,
+        selectedGameId,
         tournamentStatus: "running",
         error: null,
       };
-    case "MOVE":
+    }
+    case "MOVE": {
+      const gameId = action.payload.game_id;
+      const existing = state.games[gameId];
+      if (!existing) return state;
       return {
         ...state,
-        fen: action.payload.fen,
-        moves: [...state.moves, action.payload],
+        games: {
+          ...state.games,
+          [gameId]: {
+            ...existing,
+            fen: action.payload.fen,
+            moves: [...existing.moves, action.payload],
+          },
+        },
       };
-    case "GAME_END":
+    }
+    case "GAME_END": {
+      const { gameId, result, standings } = action.payload;
+      const existing = state.games[gameId];
+      if (!existing) return { ...state, standings };
+      const updatedGames = {
+        ...state.games,
+        [gameId]: { ...existing, isActive: false, result },
+      };
+      // If selected game just ended and other games are active, auto-select another
+      let selectedGameId = state.selectedGameId;
+      if (selectedGameId === gameId) {
+        const activeGame = Object.values(updatedGames).find((g) => g.isActive);
+        selectedGameId = activeGame?.gameId ?? selectedGameId;
+      }
       return {
         ...state,
-        isGameActive: false,
-        result: action.payload.result,
-        standings: action.payload.standings,
+        games: updatedGames,
+        selectedGameId,
+        standings,
       };
+    }
     case "TOURNAMENT_COMPLETE":
       return {
         ...state,
-        isGameActive: false,
+        games: {},
+        selectedGameId: null,
         tournamentStatus: "completed",
         standings: action.payload.standings,
       };
     case "TOURNAMENT_ERROR":
       return {
         ...state,
-        isGameActive: false,
         tournamentStatus: "error",
         error: action.payload.error,
       };
@@ -104,6 +137,11 @@ function reducer(state: GameState, action: Action): GameState {
       return {
         ...state,
         tournamentStatus: "queued",
+      };
+    case "SELECT_GAME":
+      return {
+        ...state,
+        selectedGameId: action.payload.gameId,
       };
     case "HYDRATE":
       return { ...state, ...action.payload };
@@ -114,8 +152,15 @@ function reducer(state: GameState, action: Action): GameState {
   }
 }
 
-export interface UseGameStateReturn extends GameState {
+export interface UseGameStateReturn {
+  games: Record<number, SingleGameState>;
+  selectedGameId: number | null;
+  selectedGame: SingleGameState | null;
+  standings: StandingsEntry[];
+  tournamentStatus: TournamentStatus;
+  error: string | null;
   wsStatus: ConnectionStatus;
+  selectGame: (gameId: number) => void;
 }
 
 export function useGameState(): UseGameStateReturn {
@@ -140,7 +185,11 @@ export function useGameState(): UseGameStateReturn {
       case "game_end":
         dispatch({
           type: "GAME_END",
-          payload: { result: event.result, standings: event.standings },
+          payload: {
+            gameId: event.game_id,
+            result: event.result,
+            standings: event.standings,
+          },
         });
         break;
       case "tournament_complete":
@@ -166,6 +215,10 @@ export function useGameState(): UseGameStateReturn {
     onMessage: handleMessage,
   });
 
+  const selectGame = useCallback((gameId: number) => {
+    dispatch({ type: "SELECT_GAME", payload: { gameId } });
+  }, []);
+
   // Hydrate on mount for late-join
   useEffect(() => {
     async function hydrate() {
@@ -179,28 +232,50 @@ export function useGameState(): UseGameStateReturn {
           dispatch({ type: "SET_STANDINGS", payload: standings });
         }
 
-        if (live && live.status === "running" && live.current_game) {
+        if (live && live.status === "running") {
+          // Hydrate active games
+          if (live.active_games && live.active_games.length > 0) {
+            for (const game of live.active_games) {
+              dispatch({
+                type: "GAME_START",
+                payload: {
+                  gameId: game.game_id,
+                  white: game.white,
+                  black: game.black,
+                  round: game.round,
+                },
+              });
+            }
+            // Hydrate last move events for FEN
+            if (live.last_events) {
+              for (const [, event] of Object.entries(live.last_events)) {
+                if (event && event.type === "move") {
+                  dispatch({ type: "MOVE", payload: event as unknown as MoveEvent });
+                }
+              }
+            }
+          } else if (live.current_game) {
+            // Backward compat: single-game hydration
+            dispatch({
+              type: "GAME_START",
+              payload: {
+                gameId: live.current_game.game_id,
+                white: live.current_game.white,
+                black: live.current_game.black,
+                round: live.current_game.round,
+              },
+            });
+            if (live.last_event && live.last_event.type === "move") {
+              dispatch({ type: "MOVE", payload: live.last_event as unknown as MoveEvent });
+            }
+          }
           dispatch({
             type: "HYDRATE",
             payload: {
-              gameId: live.current_game.game_id,
-              white: live.current_game.white,
-              black: live.current_game.black,
-              round: live.current_game.round,
-              isGameActive: true,
               tournamentStatus: "running",
               standings: live.latest_standings,
             },
           });
-
-          // Hydrate last event if it was a move
-          if (live.last_event && live.last_event.type === "move") {
-            const moveEvt = live.last_event as unknown as MoveEvent;
-            dispatch({
-              type: "HYDRATE",
-              payload: { fen: moveEvt.fen },
-            });
-          }
         } else if (live && live.status === "completed") {
           dispatch({
             type: "HYDRATE",
@@ -226,5 +301,16 @@ export function useGameState(): UseGameStateReturn {
     hydrate();
   }, []);
 
-  return { ...state, wsStatus };
+  const selectedGame = state.selectedGameId != null ? (state.games[state.selectedGameId] ?? null) : null;
+
+  return {
+    games: state.games,
+    selectedGameId: state.selectedGameId,
+    selectedGame,
+    standings: state.standings,
+    tournamentStatus: state.tournamentStatus,
+    error: state.error,
+    wsStatus,
+    selectGame,
+  };
 }

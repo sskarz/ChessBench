@@ -14,7 +14,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
-from src.analysis.analyzer import StockfishAnalyzer
 from src.api.models import (
     AccuracyDistribution,
     GameAnalysisResponse,
@@ -32,7 +31,6 @@ from src.api.models import (
 from src.config import settings
 from src.db.models import Game, MoveAnalysis, Player, Tournament
 from src.db.session import engine, get_session, init_db
-from src.game.orchestrator import GameConfig, GameOrchestrator
 from src.game.player_factory import build_players_from_settings, describe_player_config
 from src.game.tournament import TournamentManager
 from src.players.base import PlayerAdapter
@@ -69,8 +67,10 @@ class ConnectionManager:
 class LiveState:
     status: str = "idle"
     run_id: str | None = None
-    current_game: dict[str, Any] | None = None
+    active_games: dict[int, dict[str, Any]] = field(default_factory=dict)
+    current_game: dict[str, Any] | None = None  # backward compat: most recent game
     last_event: dict[str, Any] | None = None
+    last_events: dict[int, dict[str, Any]] = field(default_factory=dict)
     latest_standings: list[dict[str, Any]] = field(default_factory=list)
     started_at: datetime | None = None
     updated_at: datetime | None = None
@@ -164,17 +164,32 @@ async def _handle_tournament_event(event: dict[str, Any]) -> None:
     runtime.live.updated_at = _now()
     runtime.live.last_event = event
 
-    if event.get("type") == "game_start":
-        runtime.live.current_game = {
-            "game_id": event.get("game_id"),
+    event_type = event.get("type")
+    game_id = event.get("game_id")
+
+    if event_type == "game_start" and game_id is not None:
+        game_info = {
+            "game_id": game_id,
             "white": event.get("white"),
             "black": event.get("black"),
             "round": event.get("round"),
         }
+        runtime.live.active_games[game_id] = game_info
+        runtime.live.current_game = game_info  # backward compat
 
-    if event.get("type") == "game_end":
+    if event_type == "move" and game_id is not None:
+        runtime.live.last_events[game_id] = event
+
+    if event_type == "game_end" and game_id is not None:
+        runtime.live.active_games.pop(game_id, None)
+        runtime.live.last_events.pop(game_id, None)
         standings = event.get("standings", [])
         runtime.live.latest_standings = standings if isinstance(standings, list) else []
+        # Update current_game to next active game or None
+        if runtime.live.active_games:
+            runtime.live.current_game = next(iter(runtime.live.active_games.values()))
+        else:
+            runtime.live.current_game = None
 
     await runtime.manager.broadcast(event)
 
@@ -186,6 +201,8 @@ def _live_response() -> LiveStateResponse:
         run_id=runtime.live.run_id,
         current_game=runtime.live.current_game,
         last_event=runtime.live.last_event,
+        active_games=list(runtime.live.active_games.values()),
+        last_events={str(k): v for k, v in runtime.live.last_events.items()},
         latest_standings=standings,
         started_at=runtime.live.started_at,
         updated_at=runtime.live.updated_at,
@@ -193,37 +210,21 @@ def _live_response() -> LiveStateResponse:
     )
 
 
-def _build_orchestrator_and_manager(
+def _build_tournament_manager(
     players: list[PlayerAdapter],
     descriptors: dict[str, dict[str, str]],
     rounds: int,
-) -> tuple[StockfishAnalyzer, TournamentManager]:
-    analyzer = StockfishAnalyzer(
-        engine_path=settings.stockfish_path,
-        depth=settings.analysis_depth,
-        threads=settings.stockfish_threads,
-        hash_mb=settings.stockfish_hash_mb,
-    )
-
-    orchestrator = GameOrchestrator(
-        analyzer=analyzer,
-        config=GameConfig(
-            max_moves=settings.max_moves_per_side,
-            analyze_depth=settings.analysis_depth,
-            move_delay_seconds=settings.move_delay_seconds,
-        ),
-    )
-
+) -> TournamentManager:
     manager = TournamentManager(
         players=players,
-        orchestrator=orchestrator,
         session_factory=_new_session,
         event_callback=_handle_tournament_event,
         rounds=rounds,
         player_descriptors=descriptors,
+        settings=settings,
     )
 
-    return analyzer, manager
+    return manager
 
 
 async def _run_tournament(
@@ -232,13 +233,15 @@ async def _run_tournament(
     players: list[PlayerAdapter],
     descriptors: dict[str, dict[str, str]],
 ) -> None:
-    analyzer, manager = _build_orchestrator_and_manager(players, descriptors, rounds)
+    manager = _build_tournament_manager(players, descriptors, rounds)
 
     try:
         summary = await manager.run_round_robin(rounds=rounds)
         runtime.live.status = "completed"
         runtime.live.latest_standings = summary.get("standings", [])
         runtime.live.current_game = None
+        runtime.live.active_games.clear()
+        runtime.live.last_events.clear()
         runtime.live.last_event = {
             "type": "tournament_complete",
             "run_id": run_id,
@@ -250,6 +253,8 @@ async def _run_tournament(
         runtime.live.status = "error"
         runtime.live.error = str(exc)
         runtime.live.current_game = None
+        runtime.live.active_games.clear()
+        runtime.live.last_events.clear()
         runtime.live.last_event = {
             "type": "tournament_error",
             "run_id": run_id,
@@ -261,7 +266,6 @@ async def _run_tournament(
         runtime.live.updated_at = _now()
         runtime.tournament_task = None
         manager.cleanup_players(players)
-        analyzer.shutdown()
 
 
 async def _resume_tournament(
@@ -271,13 +275,15 @@ async def _resume_tournament(
     descriptors: dict[str, dict[str, str]],
     rounds: int,
 ) -> None:
-    analyzer, manager = _build_orchestrator_and_manager(players, descriptors, rounds)
+    manager = _build_tournament_manager(players, descriptors, rounds)
 
     try:
         summary = await manager.resume_round_robin(tournament_id=tournament_id)
         runtime.live.status = "completed"
         runtime.live.latest_standings = summary.get("standings", [])
         runtime.live.current_game = None
+        runtime.live.active_games.clear()
+        runtime.live.last_events.clear()
         runtime.live.last_event = {
             "type": "tournament_complete",
             "run_id": run_id,
@@ -289,6 +295,8 @@ async def _resume_tournament(
         runtime.live.status = "error"
         runtime.live.error = str(exc)
         runtime.live.current_game = None
+        runtime.live.active_games.clear()
+        runtime.live.last_events.clear()
         runtime.live.last_event = {
             "type": "tournament_error",
             "run_id": run_id,
@@ -300,7 +308,6 @@ async def _resume_tournament(
         runtime.live.updated_at = _now()
         runtime.tournament_task = None
         manager.cleanup_players(players)
-        analyzer.shutdown()
 
 
 @app.get("/health", response_model=HealthResponse)
