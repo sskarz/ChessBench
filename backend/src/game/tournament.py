@@ -24,7 +24,15 @@ TournamentEventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 SessionFactory = Callable[[], Session]
 
 
+from src.game.glicko2 import Glicko2Rating, update as glicko2_update
+
+
 class EloCalculator:
+    """Legacy Elo helper kept for backward compatibility with imports.
+
+    Tournament ratings now use Glicko-2 (see ``_update_elo``).
+    """
+
     K = 32
 
     @staticmethod
@@ -933,18 +941,25 @@ class TournamentManager:
             game.status = "abandoned"
 
     def _update_elo(self, white: Player, black: Player, result: str) -> None:
-        expected_white = EloCalculator.expected_score(white.elo, black.elo)
-        expected_black = 1 - expected_white
-
         if result == "1-0":
-            actual_white, actual_black = 1.0, 0.0
+            score_white, score_black = 1.0, 0.0
         elif result == "0-1":
-            actual_white, actual_black = 0.0, 1.0
+            score_white, score_black = 0.0, 1.0
         else:
-            actual_white, actual_black = 0.5, 0.5
+            score_white, score_black = 0.5, 0.5
 
-        white.elo = EloCalculator.update(white.elo, expected_white, actual_white)
-        black.elo = EloCalculator.update(black.elo, expected_black, actual_black)
+        white_g2 = Glicko2Rating(white.elo, white.rd, white.volatility)
+        black_g2 = Glicko2Rating(black.elo, black.rd, black.volatility)
+
+        new_white = glicko2_update(white_g2, black_g2, score_white)
+        new_black = glicko2_update(black_g2, white_g2, score_black)
+
+        white.elo = new_white.rating
+        white.rd = new_white.rd
+        white.volatility = new_white.volatility
+        black.elo = new_black.rating
+        black.rd = new_black.rd
+        black.volatility = new_black.volatility
 
     def _apply_player_result(
         self,
@@ -1054,6 +1069,7 @@ class TournamentManager:
                     {
                         "name": player.name,
                         "elo": round(player.elo, 1),
+                        "rd": round(player.rd, 1),
                         "elo_white": round(player.elo_white, 1),
                         "elo_black": round(player.elo_black, 1),
                         "elo_confidence": player.elo_confidence,

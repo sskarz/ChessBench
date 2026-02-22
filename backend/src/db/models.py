@@ -11,6 +11,8 @@ class Player(SQLModel, table=True):
     provider: str
     model_id: str
     elo: float = Field(default=1200.0)
+    rd: float = Field(default=350.0)
+    volatility: float = Field(default=0.06)
     elo_white: float = Field(default=0.0)
     elo_black: float = Field(default=0.0)
     elo_confidence: str = Field(default="none")

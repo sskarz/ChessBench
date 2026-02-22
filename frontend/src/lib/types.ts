@@ -31,6 +31,7 @@ export const CLASSIFICATION_ICONS: Record<MoveClassification, string> = {
 export interface StandingsEntry {
   name: string;
   elo: number;
+  rd: number;
   elo_white: number;
   elo_black: number;
   elo_confidence: "none" | "low" | "high";
@@ -122,6 +123,7 @@ export interface PlayerStats {
   provider: string;
   model_id: string;
   elo: number;
+  rd: number;
   elo_white: number;
   elo_black: number;
   elo_confidence: "none" | "low" | "high";

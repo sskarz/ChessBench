@@ -163,6 +163,9 @@ async def test_tournament_manager_persists_games_and_updates_players(tmp_path: P
     assert beta.games_played == 2
     assert alpha.elo != 1200.0
     assert beta.elo != 1200.0
+    # Glicko-2: RD should decrease from default after playing games
+    assert alpha.rd < 350.0
+    assert beta.rd < 350.0
 
 
 @pytest.mark.asyncio

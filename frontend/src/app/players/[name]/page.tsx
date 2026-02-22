@@ -64,7 +64,7 @@ export default function PlayerPage({ params }: { params: Promise<{ name: string 
   const fmtConf = (v: "none" | "low" | "high") => (v === "high" ? "High" : v === "low" ? "Low" : "--");
 
   const tournamentCards: { label: string; value: string; color?: string }[] = [
-    { label: "Elo", value: fmtElo(stats.elo) },
+    { label: "Elo", value: stats.elo === 0 ? "--" : `${Math.round(stats.elo)} \u00b1 ${Math.round(2 * stats.rd)}` },
     { label: "Games", value: stats.games_played.toString() },
     {
       label: "Record",

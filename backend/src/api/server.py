@@ -789,6 +789,7 @@ async def get_player_stats(player_name: str, session: Session = Depends(get_sess
         provider=player.provider,
         model_id=player.model_id,
         elo=round(player.elo, 1),
+        rd=round(player.rd, 1),
         elo_white=round(player.elo_white, 1),
         elo_black=round(player.elo_black, 1),
         elo_confidence=player.elo_confidence,

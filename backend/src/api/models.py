@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 class StandingsEntry(BaseModel):
     name: str
     elo: float
+    rd: float = 350.0
     elo_white: float
     elo_black: float
     elo_confidence: Literal["none", "low", "high"] = "none"
@@ -100,6 +101,7 @@ class PlayerStats(BaseModel):
     provider: str
     model_id: str
     elo: float
+    rd: float = 350.0
     elo_white: float
     elo_black: float
     elo_confidence: Literal["none", "low", "high"] = "none"

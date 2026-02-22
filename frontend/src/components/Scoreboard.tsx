@@ -42,8 +42,14 @@ export default function Scoreboard({ standings }: ScoreboardProps) {
   const fmtElo = (v: number | string) => (Number(v) === 0 ? "--" : Math.round(Number(v)).toString());
   const fmtConf = (v: string) => (v === "high" ? "H" : v === "low" ? "L" : "--");
 
+  const fmtRd = (v: number | string) => {
+    const n = Number(v);
+    return n === 0 ? "--" : `\u00b1${Math.round(2 * n)}`;
+  };
+
   const tournamentColumns: { key: SortKey; label: string; fmt?: (v: number | string) => string }[] = [
     { key: "elo", label: "Elo", fmt: fmtElo },
+    { key: "rd", label: "RD", fmt: fmtRd },
     { key: "wins", label: "W" },
     { key: "losses", label: "L" },
     { key: "draws", label: "D" },
