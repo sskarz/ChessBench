@@ -1,0 +1,46 @@
+services:
+  # --- Backend (FastAPI + Stockfish) ---
+  - type: web
+    name: chessbench-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: STOCKFISH_PATH
+        value: /usr/local/bin/stockfish
+      - key: DATABASE_URL
+        value: sqlite:////app/data/arena.db
+      - key: ANALYSIS_DEPTH
+        value: "8"
+      - key: STOCKFISH_THREADS
+        value: "1"
+      - key: STOCKFISH_HASH_MB
+        value: "16"
+      - key: MOVE_DELAY_SECONDS
+        value: "1.5"
+      - key: LLM_MAX_RETRIES
+        value: "5"
+      - key: LLM_TEMPERATURE
+        value: "0.0"
+      - key: LLM_MAX_TOKENS
+        value: "128"
+      - key: LLM_REASONING_EFFORT
+        value: none
+      - key: OPENROUTER_API_KEY
+        sync: false # set manually in Render dashboard
+
+  # --- Frontend (Next.js) ---
+  - type: web
+    name: chessbench-frontend
+    runtime: docker
+    dockerfilePath: ./frontend/Dockerfile
+    dockerContext: ./frontend
+    plan: free
+    envVars:
+      # The middleware and /api/config route read this at RUNTIME
+      # to proxy API requests and expose the WebSocket URL.
+      # Set this to your backend's public Render URL.
+      - key: BACKEND_URL
+        value: https://chessbench-backend.onrender.com

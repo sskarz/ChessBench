@@ -1,6 +1,6 @@
 "use client";
 
-import { useReducer, useEffect, useCallback } from "react";
+import { useReducer, useEffect, useCallback, useState } from "react";
 import { useWebSocket, type ConnectionStatus } from "./useWebSocket";
 import { getLiveState, getStandings } from "@/lib/api";
 import type {
@@ -9,7 +9,8 @@ import type {
   StandingsEntry,
 } from "@/lib/types";
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws/live";
+/** Fallback used only during local development. */
+const DEFAULT_WS_URL = "ws://localhost:8000/ws/live";
 const STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
 export type BenchmarkStatus =
@@ -165,6 +166,18 @@ export interface UseGameStateReturn {
 
 export function useGameState(): UseGameStateReturn {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const [wsUrl, setWsUrl] = useState(DEFAULT_WS_URL);
+
+  // Fetch the WebSocket URL from the server at runtime (avoids
+  // needing NEXT_PUBLIC_* build-time env vars).
+  useEffect(() => {
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((cfg: { wsUrl: string }) => {
+        if (cfg.wsUrl) setWsUrl(cfg.wsUrl);
+      })
+      .catch(() => {});
+  }, []);
 
   const handleMessage = useCallback((event: WSEvent) => {
     switch (event.type) {
@@ -211,7 +224,7 @@ export function useGameState(): UseGameStateReturn {
   }, []);
 
   const { status: wsStatus } = useWebSocket({
-    url: WS_URL,
+    url: wsUrl,
     onMessage: handleMessage,
   });
 
