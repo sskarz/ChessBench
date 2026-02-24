@@ -1,57 +1,146 @@
-# ChessBench — LLM Chess Arena
+<div align="center">
+  <img src="frontend/public/logo.png" alt="ChessBench" width="120" />
+  <h1>ChessBench</h1>
+  <p><strong>LLM Chess Benchmark Platform</strong></p>
+  <p>
+    Pit frontier LLMs against Stockfish. Analyze every move. Estimate Elo from real gameplay.
+  </p>
 
-A platform where LLMs and engines play chess against each other with live analysis. The default roster currently includes OpenAI GPT 5.2, Claude Sonnet 4.6, and Gemini 3 Flash Preview. Games are analyzed move-by-move in real time, with Elo ratings, accuracy metrics, and live spectating via WebSocket.
+  <p>
+    <img src="https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white" alt="Python" />
+    <img src="https://img.shields.io/badge/node-20+-339933?logo=node.js&logoColor=white" alt="Node.js" />
+    <img src="https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker" />
+    <img src="https://img.shields.io/github/license/sskarz/ChessBench?color=blue" alt="License" />
+  </p>
+</div>
+
+---
+
+GPT-5.2, Claude Opus 4.6, Gemini 3 Flash, and more — all playing chess against Stockfish through [OpenRouter](https://openrouter.ai). Every move is analyzed in real time by Stockfish, producing centipawn loss, accuracy scores, move classifications, and estimated Elo ratings. Watch it all happen live via WebSocket.
 
 ## Features
 
-- **Live spectating** — watch games unfold in real time with animated board, eval bar, and move-by-move analysis
-- **One-click tournament start** — launch a tournament directly from the home page (or via API)
-- **Deep analytics** — per-move Stockfish evaluation, centipawn loss, accuracy charts, and move classification (best/excellent/good/inaccuracy/mistake/blunder)
-- **Elo ratings** — K=32 system tracking relative LLM strength across round-robin tournaments
-- **ECO opening detection** — automatic opening identification from a ~150-entry ECO table
-- **Player profiles** — accuracy distribution histograms, cost tracking, blunder rates
-- **Game archive** — full move-by-move replay with keyboard navigation, PGN download, eval/accuracy charts
+| | Feature | Description |
+|---|---|---|
+| **Live Spectating** | Real-time board | Animated chessboard, eval bar, and move-by-move analysis streamed over WebSocket |
+| **Deep Analysis** | Per-move Stockfish eval | Centipawn loss, accuracy (Lichess formula), move classification: best / excellent / good / inaccuracy / mistake / blunder |
+| **Elo Estimation** | CPL-based ratings | Estimated Elo derived from aggregate centipawn loss and win/draw/loss record |
+| **Player Profiles** | Stats & histograms | Accuracy distribution, cost tracking, blunder rates, per-player performance |
+| **Game Archive** | Full replay | Move-by-move navigation (keyboard + buttons), eval/accuracy charts, PGN download |
+| **Opening Detection** | ECO lookup | Automatic opening identification from a ~150-entry ECO table |
+| **One-Click Start** | UI or API | Launch a benchmark from the homepage button or a single `POST` request |
 
-## Quick Start (Docker)
+## Quick Start
+
+### Docker (recommended)
 
 ```bash
+git clone https://github.com/sskarz/ChessBench.git
+cd ChessBench
 cp .env.example .env
-# Add your OpenRouter API key to .env (OPENROUTER_API_KEY)
+# Set OPENROUTER_API_KEY in .env
 docker compose up --build
 ```
 
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8000
-- Start a tournament from the UI button on `/`, or via API:
-  `curl -X POST http://localhost:8000/api/tournament/start -H 'Content-Type: application/json' -d '{"rounds":1}'`
+> **Frontend** `http://localhost:3000` &nbsp;&middot;&nbsp; **API** `http://localhost:8000`
 
-## Development Setup
+Hit the **Start Benchmark** button on the homepage, or:
 
-### Prerequisites
+```bash
+curl -X POST http://localhost:8000/api/benchmark/start \
+  -H 'Content-Type: application/json' \
+  -d '{"rounds": 1}'
+```
+
+### Local Development
+
+<details>
+<summary><strong>Prerequisites</strong></summary>
 
 - Python 3.11+
 - Node.js 20+
 - [uv](https://docs.astral.sh/uv/) (Python package manager)
-- [Stockfish](https://stockfishchess.org/download/) installed and accessible
+- [Stockfish](https://stockfishchess.org/download/) installed and on `PATH`
 
-### Backend
+</details>
+
+**Backend**
 
 ```bash
 cd backend
-cp .env.example .env    # Add OPENROUTER_API_KEY (optionally set STOCKFISH_PATH override)
+cp .env.example .env    # Set OPENROUTER_API_KEY
 uv sync
 uv run uvicorn src.api.server:app --reload --host 0.0.0.0 --port 8000
 ```
 
-If `STOCKFISH_PATH` is unset, ChessBench auto-detects `stockfish` from `PATH`.
+**Frontend**
 
-Deprecated key aliases (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`) are still accepted as fallback during migration, but `OPENROUTER_API_KEY` is the canonical setting.
-`LLM_MAX_TOKENS` defaults to `128` to keep move generation token usage low.
-`LLM_REASONING_EFFORT` defaults to `none` and is applied uniformly to all LLM players for controlled comparisons.
-When this global value is set, per-player `reasoning_effort` values are ignored to keep tournaments on equal footing.
-Set `OPENROUTER_HTTP_REFERER` to your app URL (for example `http://localhost:3000`) and optionally set `OPENROUTER_X_TITLE=ChessBench` for OpenRouter attribution headers.
+```bash
+cd frontend
+npm install
+npm run dev             # http://localhost:3000
+```
 
-Optional roster override via env:
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│          FRONTEND  (Next.js 16 · React 19 · TypeScript)      │
+│                                                              │
+│   Live Board ──── Scoreboard ──── Game Archive ──── Player   │
+│   (react-         (Elo, W/L/D     (replay, PGN     Profile  │
+│    chessboard)     accuracy)       eval charts)    (stats)   │
+│                        │                                     │
+│             WebSocket + REST  (configurable URLs)            │
+└────────────────────────┼─────────────────────────────────────┘
+                         │
+┌────────────────────────┼─────────────────────────────────────┐
+│               BACKEND  (FastAPI · SQLite)                    │
+│                                                              │
+│   REST API ───── WebSocket ───── Benchmark Manager           │
+│   (games,        (live move      (LLM vs Stockfish,          │
+│    standings,     broadcast)      Elo estimation)            │
+│    players)           │                                      │
+│                       │                                      │
+│   Game Orchestrator ──── Stockfish Analyzer                  │
+│   (turn loop,              (per-move eval,                   │
+│    move validation)         CPL, classification)             │
+│            │                                                 │
+│   Player Adapters                                            │
+│   ├── LLMPlayer (OpenRouter — all models)                   │
+│   └── UCIEnginePlayer (Stockfish)                           │
+└──────────────────────────────────────────────────────────────┘
+```
+
+## API Reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/health` | Health check |
+| `GET` | `/api/standings` | Current Elo standings |
+| `GET` | `/api/games` | List games (paginated) |
+| `GET` | `/api/games/{id}` | Game detail |
+| `GET` | `/api/games/{id}/analysis` | Move-by-move analysis |
+| `GET` | `/api/players/{name}/stats` | Player statistics |
+| `GET` | `/api/players/{name}/accuracy-distribution` | Move classification counts |
+| `GET` | `/api/live` | Current live game state |
+| `POST` | `/api/benchmark/start` | Start a benchmark run |
+| `WS` | `/ws/live` | Live game WebSocket |
+
+## Configuration
+
+Key environment variables (see `.env.example` for full list):
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `OPENROUTER_API_KEY` | **Required.** OpenRouter API key | — |
+| `STOCKFISH_PATH` | Path to Stockfish binary | Auto-detected from `PATH` |
+| `LLM_MAX_TOKENS` | Max tokens per move response | `128` |
+| `LLM_REASONING_EFFORT` | Reasoning effort for all LLMs | `none` |
+| `NEXT_PUBLIC_API_URL` | Frontend API base URL | `http://localhost:8000` |
+| `NEXT_PUBLIC_WS_URL` | Frontend WebSocket URL | `ws://localhost:8000/ws/live` |
+
+**Custom player roster** (override via env):
 
 ```bash
 export PLAYERS='[
@@ -60,107 +149,29 @@ export PLAYERS='[
 ]'
 ```
 
-### Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev              # Starts on http://localhost:3000
-```
-
-Browser API/WS targets are controlled by:
-- `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`)
-- `NEXT_PUBLIC_WS_URL` (default `ws://localhost:8000/ws/live`)
-
-### Local LLM-vs-LLM Script
-
-`backend/scripts/run_llm_match.py` now uses OpenRouter only.
-
-```bash
-cd backend
-uv run python scripts/run_llm_match.py \
-  --white-model openai/gpt-5.2 \
-  --black-model anthropic/claude-sonnet-4.6 \
-  --max-tokens 128 \
-  --reasoning-effort none
-```
-
-## Tournament Start Response
-
-`POST /api/tournament/start` returns `202 Accepted` and includes the active player config list:
-
-```json
-{
-  "status": "accepted",
-  "run_id": "abc123def4",
-  "rounds": 1,
-  "players": [
-    { "name": "OpenAI GPT 5.2", "provider": "openrouter", "model": "openai/gpt-5.2" },
-    { "name": "Claude Sonnet 4.6", "provider": "openrouter", "model": "anthropic/claude-sonnet-4.6" },
-    { "name": "Gemini 3 Flash Preview", "provider": "openrouter", "model": "google/gemini-3-flash-preview" }
-  ]
-}
-```
-
 ## Running Tests
 
 ```bash
+# Backend
 cd backend
-uv run pytest -q         # Run full test suite
-uv run ruff check .      # Lint
-```
+uv run pytest -q
+uv run ruff check .
 
-```bash
+# Frontend (type-check)
 cd frontend
-npm run build            # Type-check (no ESLint configured)
+npm run build
 ```
 
-## Architecture
+## Tech Stack
 
-```
-┌─────────────────────────────────────────────────────────┐
-│        FRONTEND (Next.js 16 + React 19 + TypeScript)     │
-│                                                         │
-│  Live Board ─── Scoreboard ─── Game Archive ─── Player  │
-│  (react-        (Elo, W/L/D    (replay, PGN    Profile  │
-│   chessboard)    accuracy)      eval charts)   (stats)  │
-│                       │                                  │
-│            WebSocket + REST (configurable URLs)          │
-└───────────────────────┼─────────────────────────────────┘
-                        │
-┌───────────────────────┼─────────────────────────────────┐
-│              BACKEND (FastAPI + SQLite)                  │
-│                                                         │
-│  REST API ──── WebSocket ──── Tournament Manager         │
-│  (games,       (live move     (round-robin,              │
-│   standings,    broadcast)     Elo updates)              │
-│   players)          │                                    │
-│                     │                                    │
-│  Game Orchestrator ──── Stockfish Analyzer               │
-│  (turn loop,             (per-move eval,                 │
-│   move validation)        CPL, classification)           │
-│           │                                              │
-│  Player Adapters                                         │
-│  ├── LLMPlayer (OpenRouter)                             │
-│  └── UCIEnginePlayer (Stockfish)                        │
-└─────────────────────────────────────────────────────────┘
-```
-
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Health check |
-| GET | `/api/standings` | Current Elo standings |
-| GET | `/api/games` | List games (paginated) |
-| GET | `/api/games/{id}` | Game detail |
-| GET | `/api/games/{id}/analysis` | Move-by-move analysis |
-| GET | `/api/players/{name}/stats` | Player statistics |
-| GET | `/api/players/{name}/accuracy-distribution` | Move classification counts |
-| GET | `/api/live` | Current live state |
-| POST | `/api/tournament/start` | Start a tournament (202 accepted with run/player payload) |
-| WS | `/ws/live` | Live game WebSocket |
+| Layer | Technology |
+|-------|-----------|
+| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS 4, react-chessboard, Recharts |
+| Backend | FastAPI, SQLModel, SQLite, python-chess |
+| LLM Gateway | OpenRouter (OpenAI-compatible API) |
+| Analysis Engine | Stockfish (UCI) |
+| Infrastructure | Docker Compose, uv |
 
 ## License
 
-MIT
+[MIT](LICENSE)
