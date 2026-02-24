@@ -1,8 +1,21 @@
 services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - frontend
+      - backend
+
   backend:
     build: ./backend
-    ports:
-      - "8000:8000"
+    restart: unless-stopped
     env_file: .env
     volumes:
       - chessbench-data:/app/data
@@ -12,12 +25,15 @@ services:
 
   frontend:
     build: ./frontend
-    ports:
-      - "3000:3000"
+    restart: unless-stopped
     environment:
       - BACKEND_URL=http://backend:8000
+      - NEXT_PUBLIC_API_URL=https://chessbench.net
+      - NEXT_PUBLIC_WS_URL=wss://chessbench.net/ws/live
     depends_on:
       - backend
 
 volumes:
   chessbench-data:
+  caddy-data:
+  caddy-config:

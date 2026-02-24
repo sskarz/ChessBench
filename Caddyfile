@@ -1,0 +1,19 @@
+chessbench.net {
+    # Frontend (Next.js)
+    reverse_proxy frontend:3000
+
+    # Backend API
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+
+    # WebSocket
+    handle /ws/* {
+        reverse_proxy backend:8000
+    }
+
+    # Health check
+    handle /health {
+        reverse_proxy backend:8000
+    }
+}
