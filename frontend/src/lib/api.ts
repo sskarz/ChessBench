@@ -6,7 +6,7 @@ import type {
   PlayerStats,
   AccuracyDistribution,
   LiveStateResponse,
-  TournamentStartResponse,
+  BenchmarkStartResponse,
 } from "./types";
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -58,36 +58,22 @@ export function getLiveState(): Promise<LiveStateResponse> {
   return fetchJSON<LiveStateResponse>("/api/live");
 }
 
-export async function startTournament(
-  rounds: number = 1
-): Promise<TournamentStartResponse> {
-  const res = await fetch(`${BASE_URL}/api/tournament/start`, {
+export async function startBenchmark(rounds = 1, playerName?: string): Promise<BenchmarkStartResponse> {
+  const body: Record<string, unknown> = { rounds };
+  if (playerName) {
+    body.player_name = playerName;
+  }
+  const res = await fetch(`${BASE_URL}/api/benchmark/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rounds }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const msg =
       res.status === 409
-        ? "Tournament already running"
+        ? "Benchmark already running"
         : `API ${res.status}: ${res.statusText}`;
     throw new Error(msg);
   }
-  return res.json() as Promise<TournamentStartResponse>;
-}
-
-export async function resumeTournament(): Promise<TournamentStartResponse> {
-  const res = await fetch(`${BASE_URL}/api/tournament/resume`, {
-    method: "POST",
-  });
-  if (!res.ok) {
-    const msg =
-      res.status === 409
-        ? "Tournament already running"
-        : res.status === 404
-          ? "No resumable tournament found"
-          : `API ${res.status}: ${res.statusText}`;
-    throw new Error(msg);
-  }
-  return res.json() as Promise<TournamentStartResponse>;
+  return res.json() as Promise<BenchmarkStartResponse>;
 }

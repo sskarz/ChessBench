@@ -9,6 +9,13 @@ from pydantic import BaseModel, Field
 class StandingsEntry(BaseModel):
     name: str
     elo: float
+    elo_white: float
+    elo_black: float
+    elo_confidence: Literal["none", "low", "high"] = "none"
+    elo_white_confidence: Literal["none", "low", "high"] = "none"
+    elo_black_confidence: Literal["none", "low", "high"] = "none"
+    elo_white_qualifying_moves: int = 0
+    elo_black_qualifying_moves: int = 0
     wins: int
     losses: int
     draws: int
@@ -85,6 +92,13 @@ class PlayerStats(BaseModel):
     provider: str
     model_id: str
     elo: float
+    elo_white: float
+    elo_black: float
+    elo_confidence: Literal["none", "low", "high"] = "none"
+    elo_white_confidence: Literal["none", "low", "high"] = "none"
+    elo_black_confidence: Literal["none", "low", "high"] = "none"
+    elo_white_qualifying_moves: int = 0
+    elo_black_qualifying_moves: int = 0
     games_played: int
     wins: int
     losses: int
@@ -111,17 +125,20 @@ class LiveStateResponse(BaseModel):
     run_id: str | None = None
     current_game: dict | None = None
     last_event: dict | None = None
+    active_games: list[dict] = Field(default_factory=list)
+    last_events: dict[str, dict] = Field(default_factory=dict)
     latest_standings: list[StandingsEntry] = Field(default_factory=list)
     started_at: datetime | None = None
     updated_at: datetime | None = None
     error: str | None = None
 
 
-class TournamentStartRequest(BaseModel):
+class BenchmarkStartRequest(BaseModel):
     rounds: int = Field(default=1, ge=1)
+    player_name: str | None = Field(default=None)
 
 
-class TournamentStartResponse(BaseModel):
+class BenchmarkStartResponse(BaseModel):
     status: str
     run_id: str
     rounds: int

@@ -10,7 +10,14 @@ class Player(SQLModel, table=True):
     name: str = Field(index=True, unique=True)
     provider: str
     model_id: str
-    elo: float = Field(default=1200.0)
+    elo: float = Field(default=0.0)
+    elo_white: float = Field(default=0.0)
+    elo_black: float = Field(default=0.0)
+    elo_confidence: str = Field(default="none")
+    elo_white_confidence: str = Field(default="none")
+    elo_black_confidence: str = Field(default="none")
+    elo_white_qualifying_moves: int = Field(default=0)
+    elo_black_qualifying_moves: int = Field(default=0)
     games_played: int = Field(default=0)
     wins: int = Field(default=0)
     losses: int = Field(default=0)
@@ -19,6 +26,7 @@ class Player(SQLModel, table=True):
     avg_accuracy: float = Field(default=0.0)
     total_tokens: int = Field(default=0)
     total_cost_usd: float = Field(default=0.0)
+    total_blunders: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

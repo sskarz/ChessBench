@@ -4,9 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ChessBench is an LLM Chess Arena — a platform where LLMs (Claude, GPT-5.2, Gemini) play chess against each other and against Stockfish via **OpenRouter** as a unified API gateway. Games are analyzed move-by-move by Stockfish in real-time, with Elo ratings, accuracy metrics, and live spectating via WebSocket.
-
-**Status:** All phases (1-5) complete + OpenRouter integration. See `SYSTEM_DESIGN.md` for the full design spec.
+ChessBench is an LLM Chess Benchmark — a platform where LLMs (Claude, GPT-5.2, Gemini) play chess against Stockfish via **OpenRouter** as a unified API gateway. Games are analyzed move-by-move by Stockfish in real-time, with Elo ratings estimated from CPL, accuracy metrics, and live spectating via WebSocket.
 
 ## Commands
 
@@ -15,8 +13,7 @@ ChessBench is an LLM Chess Arena — a platform where LLMs (Claude, GPT-5.2, Gem
 ```bash
 uv sync                    # Install dependencies
 uv run pytest -q           # Run full test suite
-uv run pytest tests/test_elo.py -q          # Run a single test file
-uv run pytest tests/test_elo.py::test_name  # Run a single test
+uv run pytest tests/test_benchmark_manager.py -q  # Run a single test file
 uv run ruff check .        # Lint
 uv run uvicorn src.api.server:app --reload --host 0.0.0.0 --port 8000  # Dev server
 ```
@@ -34,9 +31,9 @@ npm run build              # Production build (also serves as type-check)
 1. Start backend: `cd backend && uv run uvicorn src.api.server:app --reload --port 8000`
 2. Start frontend: `cd frontend && npm run dev`
 3. Open `http://localhost:3000`
-4. Start a tournament: `curl -X POST http://localhost:8000/api/tournament/start -H 'Content-Type: application/json' -d '{"rounds":1}'`
+4. Start a benchmark: `curl -X POST http://localhost:8000/api/benchmark/start -H 'Content-Type: application/json' -d '{"rounds":1}'`
 
-Default players: `openai/gpt-5.2`, `anthropic/claude-opus-4-6`, `google/gemini-3-flash-preview` (all via OpenRouter), and Stockfish-800.
+Default players: `openai/gpt-5.2`, `anthropic/claude-opus-4-6`, `google/gemini-3-flash-preview` (all via OpenRouter), benchmarked against Stockfish-800.
 
 ### Running the full stack (Docker)
 
@@ -54,8 +51,8 @@ Frontend at `http://localhost:3000`, backend API at `http://localhost:8000`.
 All backend code is in `backend/src/` using feature-first modules:
 
 - **`players/`** — `PlayerAdapter` ABC (`base.py`) with implementations: `LLMPlayer` (all LLMs via OpenRouter's OpenAI-compatible API) and `UCIEnginePlayer` (Stockfish). Every adapter returns a `MoveResult` dataclass with the move, tokens, cost, think time, and illegal attempt count.
-- **`analysis/`** — `StockfishAnalyzer` evaluates each move immediately after it's played. Uses Lichess-style accuracy formula and classifies moves (best/excellent/good/inaccuracy/mistake/blunder) based on centipawn loss.
-- **`game/`** — `GameOrchestrator` runs the core game loop (alternating moves with per-move analysis), emitting `LiveMoveEvent`s for real-time updates. `TournamentManager` handles round-robin scheduling and Elo updates (K=32, start 1200). `PlayerFactory` builds adapters from config (supports `openrouter` and `engine` providers). `openings.py` detects ECO openings from PGN via a ~150-entry lookup table (longest match wins).
+- **`analysis/`** — `StockfishAnalyzer` evaluates each move immediately after it's played. Uses Lichess-style accuracy formula and classifies moves (best/excellent/good/inaccuracy/mistake/blunder) based on centipawn loss. `elo_estimator.py` estimates Elo from aggregate CPL and win/draw/loss record.
+- **`game/`** — `GameOrchestrator` runs the core game loop (alternating moves with per-move analysis), emitting `LiveMoveEvent`s for real-time updates. `BenchmarkManager` handles benchmark scheduling (LLMs vs Stockfish) and CPL-to-Elo estimation. `PlayerFactory` builds adapters from config (supports `openrouter` and `engine` providers). `openings.py` detects ECO openings from PGN via a ~150-entry lookup table (longest match wins).
 - **`api/`** — FastAPI REST endpoints + WebSocket at `/ws/live`. Response schemas live in `api/models.py`.
 - **`db/`** — SQLModel tables (`Player`, `Game`, `MoveAnalysis`, `Tournament`) with SQLite default. Session factory in `session.py`.
 - **`config.py`** — Pydantic `BaseSettings` loading from `.env`. Contains OpenRouter credentials, player roster, Stockfish path, LLM retry/temperature/max-tokens/reasoning-effort settings, DB URL.
@@ -87,7 +84,7 @@ Next.js 16 (App Router) + TypeScript + Tailwind CSS 4. All source in `frontend/s
 
 ### Scripts
 
-- **`backend/scripts/run_llm_match.py`** — CLI tool for running ad-hoc LLM vs LLM games outside the tournament system. Uses OpenRouter provider. Run: `uv run python -m scripts.run_llm_match --white-model openai/gpt-4o --black-model anthropic/claude-sonnet-4`
+- **`backend/scripts/run_llm_match.py`** — CLI tool for running ad-hoc LLM vs LLM games outside the benchmark system. Uses OpenRouter provider. Run: `uv run python -m scripts.run_llm_match --white-model openai/gpt-4o --black-model anthropic/claude-sonnet-4`
 
 ### Branding
 
@@ -95,6 +92,7 @@ Next.js 16 (App Router) + TypeScript + Tailwind CSS 4. All source in `frontend/s
 
 ## Key Design Decisions
 
+- **Benchmark-only architecture** — LLMs play against Stockfish (not each other). Elo is estimated from CPL using the Lichess accuracy formula, not from head-to-head results. This eliminates the complexity of round-robin tournament scheduling and Glicko-2 rating updates.
 - **OpenRouter as unified LLM gateway** — all LLM calls (OpenAI, Anthropic, Google models) go through OpenRouter's OpenAI-compatible API. This replaces the previous per-provider SDK approach (`openai`, `anthropic`, `google-genai`). Set `OPENROUTER_API_KEY` in `.env`; legacy per-provider keys (`OPENAI_API_KEY`, etc.) are supported as deprecated fallbacks.
 - LLMs receive **FEN + legal moves list** (not PGN completion) for structured prompting; system prompt asks for UCI-format responses
 - **Robust move extraction** — `LLMPlayer._extract_move_from_response()` tries direct UCI/SAN parsing first, then regex-scans the response for UCI and SAN candidates. This handles verbose/chatty model responses gracefully.
@@ -102,6 +100,7 @@ Next.js 16 (App Router) + TypeScript + Tailwind CSS 4. All source in `frontend/s
 - **Reasoning effort control** — configurable via `LLM_REASONING_EFFORT` env var or per-player `reasoning_effort` field. GPT-5.x models default to `"none"` to avoid reasoning overhead. If a response comes back empty due to `finish_reason=length`, a recovery request is sent with higher `max_tokens` and `reasoning_effort="none"`.
 - Analysis is **per-move in real-time** (not post-game batch), enabling live eval bar updates
 - Primary metric is **centipawn loss (CPL)**; accuracy uses the Lichess formula: `103.1668 * exp(-0.04354 * min(cpl, 1000)) - 3.1668`
+- **CPL-to-Elo estimation** — `elo_estimator.py` converts aggregate CPL into an estimated Elo, with separate white/black estimates weighted by qualifying move count. Confidence levels (none/low/high) based on minimum qualifying moves threshold.
 - **ECO opening detection** matches game PGN against a ~150-entry table sorted longest-first; `Game` DB model stores `opening_eco`/`opening_name` (nullable)
 - **Cost extraction from OpenRouter** — `LLMPlayer` extracts cost from multiple possible response locations (usage.cost, usage.total_cost, etc.) to handle varying OpenRouter response formats
 
@@ -111,7 +110,7 @@ Next.js 16 (App Router) + TypeScript + Tailwind CSS 4. All source in `frontend/s
 - Python 3.11+, PEP 8, 4-space indent, explicit type hints
 - `snake_case` for modules/functions/variables, `PascalCase` for classes, `UPPER_SNAKE_CASE` for constants
 - API schemas in `api/models.py` — no ad-hoc response dicts in handlers
-- Tests use `pytest` + `pytest-asyncio`; test names describe behavior (e.g., `test_start_tournament_rejects_when_running`)
+- Tests use `pytest` + `pytest-asyncio`; test names describe behavior (e.g., `test_benchmark_manager_rejects_concurrent_run`)
 - Environment: copy `backend/.env.example` to `.env` and set `OPENROUTER_API_KEY` before running (for Docker, use root `.env.example` instead). Legacy per-provider keys are deprecated fallbacks.
 
 ### Frontend

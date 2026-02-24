@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import Generator
@@ -43,8 +42,8 @@ def _build_test_engine(db_file: Path):
 
 def _seed_data(engine) -> None:
     with Session(engine) as session:
-        alpha = Player(name="Alpha", provider="engine", model_id="stockfish", elo=1210.5, games_played=1, wins=1)
-        beta = Player(name="Beta", provider="engine", model_id="stockfish", elo=1189.5, games_played=1, losses=1)
+        alpha = Player(name="Alpha", provider="openrouter", model_id="test/alpha", elo=1210.5, games_played=1, wins=1)
+        beta = Player(name="Beta", provider="openrouter", model_id="test/beta", elo=1189.5, games_played=1, losses=1)
         session.add(alpha)
         session.add(beta)
         session.commit()
@@ -112,46 +111,14 @@ def _client_with_seeded_db(tmp_path: Path) -> Generator[TestClient, None, None]:
 
     app.dependency_overrides[get_session] = _override_get_session
     server.runtime.live = LiveState(updated_at=datetime.utcnow())
-    server.runtime.tournament_task = None
+    server.runtime.benchmark_task = None
 
     with TestClient(app) as client:
         yield client
 
     app.dependency_overrides.clear()
     server.runtime.live = LiveState(updated_at=datetime.utcnow())
-    server.runtime.tournament_task = None
-
-
-def _client_with_resumable_tournament(
-    tmp_path: Path, player_names: list[str]
-) -> Generator[TestClient, None, None]:
-    engine = _build_test_engine(tmp_path / "resume.db")
-
-    with Session(engine) as session:
-        tournament = Tournament(
-            name="Round Robin Test",
-            format="round_robin",
-            rounds=1,
-            status="error",
-            player_names_json=json.dumps(player_names),
-        )
-        session.add(tournament)
-        session.commit()
-
-    def _override_get_session() -> Generator[Session, None, None]:
-        with Session(engine) as session:
-            yield session
-
-    app.dependency_overrides[get_session] = _override_get_session
-    server.runtime.live = LiveState(updated_at=datetime.utcnow())
-    server.runtime.tournament_task = None
-
-    with TestClient(app) as client:
-        yield client
-
-    app.dependency_overrides.clear()
-    server.runtime.live = LiveState(updated_at=datetime.utcnow())
-    server.runtime.tournament_task = None
+    server.runtime.benchmark_task = None
 
 
 def test_api_read_endpoints(tmp_path: Path) -> None:
@@ -200,50 +167,18 @@ def test_api_live_endpoint(tmp_path: Path) -> None:
         assert response.json()["run_id"] == "run-123"
 
 
-def test_tournament_start_endpoint_accept_and_conflict(monkeypatch) -> None:
-    monkeypatch.setattr(server, "init_db", lambda: None)
-
-    players = [DummyPlayer("A"), DummyPlayer("B")]
-    monkeypatch.setattr(server, "build_players_from_settings", lambda _settings: (players, []))
-    monkeypatch.setattr(
-        server,
-        "describe_player_config",
-        lambda player: {"name": player.get_name(), "provider": "engine", "model": "stockfish"},
-    )
-
-    def _fake_create_task(coro):
-        coro.close()
-        return DummyTask(is_done=False)
-
-    monkeypatch.setattr(server.asyncio, "create_task", _fake_create_task)
-
-    server.runtime.live = LiveState(updated_at=datetime.utcnow())
-    server.runtime.tournament_task = None
-
-    with TestClient(app) as client:
-        accepted = client.post("/api/tournament/start", json={"rounds": 1})
-        assert accepted.status_code == 202
-        assert accepted.json()["status"] == "accepted"
-
-        conflict = client.post("/api/tournament/start", json={"rounds": 1})
-        assert conflict.status_code == 409
-
-    server.runtime.live = LiveState(updated_at=datetime.utcnow())
-    server.runtime.tournament_task = None
-
-
-def test_tournament_start_endpoint_rejects_partial_roster(monkeypatch) -> None:
+def test_benchmark_start_endpoint_rejects_partial_roster(monkeypatch) -> None:
     monkeypatch.setattr(server, "init_db", lambda: None)
 
     players = [DummyPlayer("A"), DummyPlayer("B"), DummyPlayer("C")]
-    errors = ["Failed to build engine player 'Stockfish-800' (engine_path=/bad/path): missing binary"]
+    errors = ["Failed to build player 'Broken'"]
     monkeypatch.setattr(server, "build_players_from_settings", lambda _settings: (players, errors))
 
     server.runtime.live = LiveState(updated_at=datetime.utcnow())
-    server.runtime.tournament_task = None
+    server.runtime.benchmark_task = None
 
     with TestClient(app) as client:
-        response = client.post("/api/tournament/start", json={"rounds": 1})
+        response = client.post("/api/benchmark/start")
         assert response.status_code == 400
         detail = response.json()["detail"]
         assert detail["message"] == "One or more configured players failed to initialize"
@@ -252,21 +187,147 @@ def test_tournament_start_endpoint_rejects_partial_roster(monkeypatch) -> None:
         assert detail["initialized_players"] == 3
 
     server.runtime.live = LiveState(updated_at=datetime.utcnow())
-    server.runtime.tournament_task = None
+    server.runtime.benchmark_task = None
 
 
-def test_tournament_resume_endpoint_rejects_partial_roster(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(server, "init_db", lambda: None)
+def test_standings_hide_benchmark_anchor_only(tmp_path: Path) -> None:
+    engine = _build_test_engine(tmp_path / "anchor.db")
+    _seed_data(engine)
 
-    players = [DummyPlayer("A"), DummyPlayer("B"), DummyPlayer("C")]
-    errors = ["Failed to build engine player 'Stockfish-800' (engine_path=/bad/path): missing binary"]
-    monkeypatch.setattr(server, "build_players_from_settings", lambda _settings: (players, errors))
+    with Session(engine) as session:
+        session.add(Player(name="Engine Rival", provider="engine", model_id="lc0", elo=1300.0))
+        session.add(Player(name="Stockfish-1320", provider="engine", model_id="stockfish", elo=1200.0))
+        session.commit()
 
-    for client in _client_with_resumable_tournament(tmp_path, ["A", "B", "C"]):
-        response = client.post("/api/tournament/resume")
-        assert response.status_code == 400
-        detail = response.json()["detail"]
-        assert detail["message"] == "One or more configured players failed to initialize"
-        assert detail["errors"] == errors
-        assert detail["configured_players"] >= 3
-        assert detail["initialized_players"] == 3
+    def _override_get_session() -> Generator[Session, None, None]:
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _override_get_session
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.benchmark_task = None
+
+    with TestClient(app) as client:
+        standings = client.get("/api/standings")
+        assert standings.status_code == 200
+        names = {row["name"] for row in standings.json()}
+        assert "Engine Rival" in names
+        assert "Stockfish-1320" not in names
+
+    app.dependency_overrides.clear()
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.benchmark_task = None
+
+
+def test_standings_blunder_rate_from_total_blunders(tmp_path: Path) -> None:
+    engine = _build_test_engine(tmp_path / "standings_blunder.db")
+
+    with Session(engine) as session:
+        alpha = Player(
+            name="Alpha",
+            provider="openrouter",
+            model_id="alpha",
+            elo=1400.0,
+            games_played=2,
+            total_blunders=1,
+        )
+        beta = Player(
+            name="Beta",
+            provider="openrouter",
+            model_id="beta",
+            elo=1300.0,
+            games_played=2,
+            total_blunders=4,
+        )
+        session.add(alpha)
+        session.add(beta)
+        session.commit()
+
+    def _override_get_session() -> Generator[Session, None, None]:
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _override_get_session
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.benchmark_task = None
+
+    with TestClient(app) as client:
+        rows = client.get("/api/standings")
+        assert rows.status_code == 200
+        data = rows.json()
+
+        alpha_row = next(row for row in data if row["name"] == "Alpha")
+        beta_row = next(row for row in data if row["name"] == "Beta")
+        assert alpha_row["blunder_rate"] == 0.5
+        assert beta_row["blunder_rate"] == 2.0
+
+    app.dependency_overrides.clear()
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.benchmark_task = None
+
+
+def test_accuracy_distribution_returns_all_games(tmp_path: Path) -> None:
+    engine = _build_test_engine(tmp_path / "accuracy.db")
+
+    with Session(engine) as session:
+        bm = Tournament(name="BM", format="benchmark", rounds=1, status="completed")
+        session.add(bm)
+        session.commit()
+        session.refresh(bm)
+
+        alpha = Player(name="Alpha", provider="openrouter", model_id="alpha")
+        beta = Player(name="Beta", provider="openrouter", model_id="beta")
+        session.add(alpha)
+        session.add(beta)
+        session.commit()
+        session.refresh(alpha)
+        session.refresh(beta)
+
+        session.add(Game(id=1, tournament_id=bm.id, white_id=alpha.id, black_id=beta.id, status="completed"))
+        session.add(
+            MoveAnalysis(
+                game_id=1,
+                move_number=1,
+                color="white",
+                move_uci="e2e4",
+                move_san="e4",
+                fen_before="start",
+                fen_after="after",
+                centipawn_loss=0,
+                classification="best",
+            )
+        )
+        session.add(
+            MoveAnalysis(
+                game_id=1,
+                move_number=1,
+                color="black",
+                move_uci="e7e5",
+                move_san="e5",
+                fen_before="start",
+                fen_after="after",
+                centipawn_loss=120,
+                classification="blunder",
+            )
+        )
+        session.commit()
+
+    def _override_get_session() -> Generator[Session, None, None]:
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _override_get_session
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.benchmark_task = None
+
+    with TestClient(app) as client:
+        response = client.get("/api/players/Alpha/accuracy-distribution")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total_moves"] == 1
+        assert payload["best"] == 1
+        assert payload["blunder"] == 0
+
+    app.dependency_overrides.clear()
+    server.runtime.live = LiveState(updated_at=datetime.utcnow())
+    server.runtime.benchmark_task = None

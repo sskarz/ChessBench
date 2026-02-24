@@ -136,7 +136,7 @@ class GameOrchestrator:
             color_str = "white" if board.turn == chess.WHITE else "black"
 
             try:
-                result: MoveResult = current.get_move(board, game_history)
+                result: MoveResult = await asyncio.to_thread(current.get_move, board, game_history)
             except Exception as exc:
                 winner = "0-1" if board.turn == chess.WHITE else "1-0"
                 game.headers["Result"] = winner
@@ -194,7 +194,7 @@ class GameOrchestrator:
                 black_tokens += result.tokens_used
                 black_cost += result.cost_usd
 
-            move_eval: MoveEval = self.analyzer.analyze_move(board, result.move)
+            move_eval: MoveEval = await asyncio.to_thread(self.analyzer.analyze_move, board, result.move)
 
             if board.turn == chess.WHITE:
                 white_cpls.append(move_eval.centipawn_loss)
