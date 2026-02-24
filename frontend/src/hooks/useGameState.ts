@@ -12,7 +12,7 @@ import type {
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws/live";
 const STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
-export type TournamentStatus =
+export type BenchmarkStatus =
   | "idle"
   | "running"
   | "completed"
@@ -34,7 +34,7 @@ interface MultiGameState {
   games: Record<number, SingleGameState>;
   selectedGameId: number | null;
   standings: StandingsEntry[];
-  tournamentStatus: TournamentStatus;
+  benchmarkStatus: BenchmarkStatus;
   error: string | null;
 }
 
@@ -42,9 +42,9 @@ type Action =
   | { type: "GAME_START"; payload: { gameId: number; white: string; black: string; round: number } }
   | { type: "MOVE"; payload: MoveEvent }
   | { type: "GAME_END"; payload: { gameId: number; result: string; standings: StandingsEntry[] } }
-  | { type: "TOURNAMENT_COMPLETE"; payload: { standings: StandingsEntry[] } }
-  | { type: "TOURNAMENT_ERROR"; payload: { error: string } }
-  | { type: "TOURNAMENT_QUEUED" }
+  | { type: "BENCHMARK_COMPLETE"; payload: { standings: StandingsEntry[] } }
+  | { type: "BENCHMARK_ERROR"; payload: { error: string } }
+  | { type: "BENCHMARK_QUEUED" }
   | { type: "SELECT_GAME"; payload: { gameId: number } }
   | { type: "HYDRATE"; payload: Partial<MultiGameState> }
   | { type: "SET_STANDINGS"; payload: StandingsEntry[] };
@@ -53,7 +53,7 @@ const initialState: MultiGameState = {
   games: {},
   selectedGameId: null,
   standings: [],
-  tournamentStatus: "idle",
+  benchmarkStatus: "idle",
   error: null,
 };
 
@@ -78,7 +78,7 @@ function reducer(state: MultiGameState, action: Action): MultiGameState {
         ...state,
         games,
         selectedGameId,
-        tournamentStatus: "running",
+        benchmarkStatus: "running",
         error: null,
       };
     }
@@ -119,24 +119,24 @@ function reducer(state: MultiGameState, action: Action): MultiGameState {
         standings,
       };
     }
-    case "TOURNAMENT_COMPLETE":
+    case "BENCHMARK_COMPLETE":
       return {
         ...state,
         games: {},
         selectedGameId: null,
-        tournamentStatus: "completed",
+        benchmarkStatus: "completed",
         standings: action.payload.standings,
       };
-    case "TOURNAMENT_ERROR":
+    case "BENCHMARK_ERROR":
       return {
         ...state,
-        tournamentStatus: "error",
+        benchmarkStatus: "error",
         error: action.payload.error,
       };
-    case "TOURNAMENT_QUEUED":
+    case "BENCHMARK_QUEUED":
       return {
         ...state,
-        tournamentStatus: "queued",
+        benchmarkStatus: "queued",
       };
     case "SELECT_GAME":
       return {
@@ -157,7 +157,7 @@ export interface UseGameStateReturn {
   selectedGameId: number | null;
   selectedGame: SingleGameState | null;
   standings: StandingsEntry[];
-  tournamentStatus: TournamentStatus;
+  benchmarkStatus: BenchmarkStatus;
   error: string | null;
   wsStatus: ConnectionStatus;
   selectGame: (gameId: number) => void;
@@ -192,20 +192,20 @@ export function useGameState(): UseGameStateReturn {
           },
         });
         break;
-      case "tournament_complete":
+      case "benchmark_complete":
         dispatch({
-          type: "TOURNAMENT_COMPLETE",
+          type: "BENCHMARK_COMPLETE",
           payload: { standings: event.standings },
         });
         break;
-      case "tournament_error":
+      case "benchmark_error":
         dispatch({
-          type: "TOURNAMENT_ERROR",
+          type: "BENCHMARK_ERROR",
           payload: { error: event.error },
         });
         break;
-      case "tournament_queued":
-        dispatch({ type: "TOURNAMENT_QUEUED" });
+      case "benchmark_queued":
+        dispatch({ type: "BENCHMARK_QUEUED" });
         break;
     }
   }, []);
@@ -272,7 +272,7 @@ export function useGameState(): UseGameStateReturn {
           dispatch({
             type: "HYDRATE",
             payload: {
-              tournamentStatus: "running",
+              benchmarkStatus: "running",
               standings: live.latest_standings,
             },
           });
@@ -280,7 +280,7 @@ export function useGameState(): UseGameStateReturn {
           dispatch({
             type: "HYDRATE",
             payload: {
-              tournamentStatus: "completed",
+              benchmarkStatus: "completed",
               standings: live.latest_standings,
             },
           });
@@ -288,7 +288,7 @@ export function useGameState(): UseGameStateReturn {
           dispatch({
             type: "HYDRATE",
             payload: {
-              tournamentStatus: "error",
+              benchmarkStatus: "error",
               error: live.error,
             },
           });
@@ -308,7 +308,7 @@ export function useGameState(): UseGameStateReturn {
     selectedGameId: state.selectedGameId,
     selectedGame,
     standings: state.standings,
-    tournamentStatus: state.tournamentStatus,
+    benchmarkStatus: state.benchmarkStatus,
     error: state.error,
     wsStatus,
     selectGame,

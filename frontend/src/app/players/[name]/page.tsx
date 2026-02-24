@@ -63,8 +63,15 @@ export default function PlayerPage({ params }: { params: Promise<{ name: string 
   const fmtElo = (v: number) => (v === 0 ? "--" : Math.round(v).toString());
   const fmtConf = (v: "none" | "low" | "high") => (v === "high" ? "High" : v === "low" ? "Low" : "--");
 
-  const tournamentCards: { label: string; value: string; color?: string }[] = [
-    { label: "Elo", value: stats.elo === 0 ? "--" : `${Math.round(stats.elo)} \u00b1 ${Math.round(2 * stats.rd)}` },
+  const statCards: { label: string; value: string; color?: string }[] = [
+    { label: "Elo", value: fmtElo(stats.elo) },
+    { label: "Elo Conf", value: fmtConf(stats.elo_confidence) },
+    { label: "Elo (White)", value: fmtElo(stats.elo_white) },
+    { label: "W Conf", value: fmtConf(stats.elo_white_confidence) },
+    { label: "Elo (Black)", value: fmtElo(stats.elo_black) },
+    { label: "B Conf", value: fmtConf(stats.elo_black_confidence) },
+    { label: "W Qualifying", value: stats.elo_white_qualifying_moves.toString() },
+    { label: "B Qualifying", value: stats.elo_black_qualifying_moves.toString() },
     { label: "Games", value: stats.games_played.toString() },
     {
       label: "Record",
@@ -85,32 +92,6 @@ export default function PlayerPage({ params }: { params: Promise<{ name: string 
     { label: "Cost", value: `$${stats.total_cost_usd.toFixed(4)}` },
   ];
 
-  const benchmarkCards: { label: string; value: string; color?: string }[] = [
-    { label: "Benchmark Elo", value: fmtElo(stats.benchmark_elo) },
-    { label: "Elo Conf", value: fmtConf(stats.elo_confidence) },
-    { label: "Elo (White)", value: fmtElo(stats.elo_white) },
-    { label: "W Conf", value: fmtConf(stats.elo_white_confidence) },
-    { label: "Elo (Black)", value: fmtElo(stats.elo_black) },
-    { label: "B Conf", value: fmtConf(stats.elo_black_confidence) },
-    { label: "W Qualifying", value: stats.elo_white_qualifying_moves.toString() },
-    { label: "B Qualifying", value: stats.elo_black_qualifying_moves.toString() },
-    { label: "Games", value: stats.benchmark_games_played.toString() },
-    {
-      label: "Record",
-      value: `${stats.benchmark_wins}W / ${stats.benchmark_losses}L / ${stats.benchmark_draws}D`,
-    },
-    {
-      label: "Accuracy",
-      value: `${stats.benchmark_avg_accuracy.toFixed(1)}%`,
-      color: stats.benchmark_avg_accuracy >= 80 ? "var(--clr-best)" : stats.benchmark_avg_accuracy >= 60 ? "var(--clr-good)" : "var(--clr-mistake)",
-    },
-    { label: "Avg CPL", value: stats.benchmark_avg_cpl.toFixed(1) },
-    { label: "Tokens", value: stats.benchmark_total_tokens.toLocaleString() },
-    { label: "Cost", value: `$${stats.benchmark_total_cost_usd.toFixed(4)}` },
-  ];
-
-  const showBenchmark = stats.benchmark_games_played > 0;
-
   return (
     <div className="min-h-screen bg-background">
       <Navigation />
@@ -129,14 +110,14 @@ export default function PlayerPage({ params }: { params: Promise<{ name: string 
             </p>
           </div>
 
-          {/* Tournament Stats */}
+          {/* Benchmark Stats */}
           <h2 className="mb-3 font-[family-name:var(--font-display)] text-sm font-semibold uppercase tracking-wider text-secondary">
-            Tournament Stats
+            Benchmark Stats
           </h2>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            {tournamentCards.map((card, i) => (
+            {statCards.map((card, i) => (
               <motion.div
-                key={`t-${card.label}`}
+                key={card.label}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.05 }}
@@ -154,36 +135,6 @@ export default function PlayerPage({ params }: { params: Promise<{ name: string 
               </motion.div>
             ))}
           </div>
-
-          {/* Benchmark Stats */}
-          {showBenchmark && (
-            <>
-              <h2 className="mt-8 mb-3 font-[family-name:var(--font-display)] text-sm font-semibold uppercase tracking-wider text-secondary">
-                Benchmark Stats
-              </h2>
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                {benchmarkCards.map((card, i) => (
-                  <motion.div
-                    key={`b-${card.label}`}
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.4 + i * 0.05 }}
-                    className="rounded-lg border border-border bg-surface p-4"
-                  >
-                    <div className="text-[10px] uppercase tracking-wider text-muted">
-                      {card.label}
-                    </div>
-                    <div
-                      className="mt-1 font-[family-name:var(--font-mono)] text-lg font-semibold"
-                      style={card.color ? { color: card.color } : undefined}
-                    >
-                      {card.value}
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-            </>
-          )}
 
           {/* Accuracy Distribution */}
           {distribution && distribution.total_moves > 0 && (

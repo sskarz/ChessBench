@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { useGameState } from "@/hooks/useGameState";
-import { startTournament, resumeTournament, startBenchmark } from "@/lib/api";
+import { startBenchmark } from "@/lib/api";
 import Navigation from "@/components/Navigation";
 import LiveBoard from "@/components/LiveBoard";
 import EvalBar from "@/components/EvalBar";
@@ -12,6 +12,12 @@ import Scoreboard from "@/components/Scoreboard";
 import GameMiniCard from "@/components/GameMiniCard";
 import GameDetailPanel from "@/components/GameDetailPanel";
 
+const AVAILABLE_MODELS = [
+  "OpenAI GPT 5.2",
+  "Claude Sonnet 4.6",
+  "Gemini 3 Flash Preview",
+];
+
 export default function Home() {
   const {
     wsStatus,
@@ -19,52 +25,25 @@ export default function Home() {
     selectedGameId,
     selectedGame,
     standings,
-    tournamentStatus,
+    benchmarkStatus,
     error,
     selectGame,
   } = useGameState();
 
-  const [isStarting, setIsStarting] = useState(false);
-  const [isResuming, setIsResuming] = useState(false);
   const [isBenchmarking, setIsBenchmarking] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = useState(AVAILABLE_MODELS[0]);
 
-  const tournamentBusy =
-    isStarting ||
-    isResuming ||
+  const benchmarkBusy =
     isBenchmarking ||
-    tournamentStatus === "running" ||
-    tournamentStatus === "queued";
-
-  async function handleStartTournament() {
-    setIsStarting(true);
-    setStartError(null);
-    try {
-      await startTournament(1);
-    } catch (err) {
-      setStartError(err instanceof Error ? err.message : "Failed to start tournament");
-    } finally {
-      setIsStarting(false);
-    }
-  }
-
-  async function handleResumeTournament() {
-    setIsResuming(true);
-    setStartError(null);
-    try {
-      await resumeTournament();
-    } catch (err) {
-      setStartError(err instanceof Error ? err.message : "Failed to resume tournament");
-    } finally {
-      setIsResuming(false);
-    }
-  }
+    benchmarkStatus === "running" ||
+    benchmarkStatus === "queued";
 
   async function handleStartBenchmark() {
     setIsBenchmarking(true);
     setStartError(null);
     try {
-      await startBenchmark(10);
+      await startBenchmark(1, selectedModel);
     } catch (err) {
       setStartError(err instanceof Error ? err.message : "Failed to start benchmark");
     } finally {
@@ -134,14 +113,14 @@ export default function Home() {
       </AnimatePresence>
 
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
-        {/* Tournament status header */}
-        {tournamentStatus !== "idle" && (
+        {/* Benchmark status header */}
+        {benchmarkStatus !== "idle" && (
           <motion.div
             initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
             className="mb-6"
           >
-            {tournamentStatus === "running" && activeGames.length > 0 && (
+            {benchmarkStatus === "running" && activeGames.length > 0 && (
               <p className="text-sm text-secondary">
                 {activeGames.length} game{activeGames.length !== 1 ? "s" : ""} in progress
                 {sg && (
@@ -151,17 +130,17 @@ export default function Home() {
                 )}
               </p>
             )}
-            {tournamentStatus === "running" && activeGames.length === 0 && sg && !sg.isActive && (
+            {benchmarkStatus === "running" && activeGames.length === 0 && sg && !sg.isActive && (
               <p className="text-sm text-secondary">
                 Game ended: <span className="text-foreground font-medium">{sg.result}</span>
               </p>
             )}
-            {tournamentStatus === "completed" && (
+            {benchmarkStatus === "completed" && (
               <p className="text-sm text-[var(--clr-best)]">
-                Tournament complete
+                Benchmark complete
               </p>
             )}
-            {tournamentStatus === "error" && (
+            {benchmarkStatus === "error" && (
               <p className="text-sm text-[var(--clr-blunder)]">
                 Error: {error}
               </p>
@@ -243,51 +222,33 @@ export default function Home() {
                     <p className="font-[family-name:var(--font-display)] text-lg font-semibold text-secondary">
                       No active game
                     </p>
-                    <div className="mt-4 flex flex-wrap gap-3">
-                      <button
-                        onClick={handleStartTournament}
-                        disabled={tournamentBusy}
-                        className="rounded-lg bg-accent px-6 py-2.5 font-[family-name:var(--font-display)] text-sm font-semibold text-white transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {isStarting ? (
-                          <span className="flex items-center gap-2">
-                            <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                            Starting...
-                          </span>
-                        ) : (
-                          "Start Tournament"
-                        )}
-                      </button>
-                      <button
-                        onClick={handleStartBenchmark}
-                        disabled={tournamentBusy}
-                        className="rounded-lg bg-[var(--clr-best)] px-6 py-2.5 font-[family-name:var(--font-display)] text-sm font-semibold text-white transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {isBenchmarking ? (
-                          <span className="flex items-center gap-2">
-                            <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                            Benchmarking...
-                          </span>
-                        ) : (
-                          "Start Benchmark"
-                        )}
-                      </button>
-                      {(tournamentStatus === "idle" || tournamentStatus === "error" || tournamentStatus === "completed") && (
-                        <button
-                          onClick={handleResumeTournament}
-                          disabled={tournamentBusy}
-                          className="rounded-lg border border-accent px-6 py-2.5 font-[family-name:var(--font-display)] text-sm font-semibold text-accent transition-all hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    <div className="mt-4 flex flex-wrap gap-3 items-center justify-center">
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={selectedModel}
+                          onChange={(e) => setSelectedModel(e.target.value)}
+                          disabled={benchmarkBusy}
+                          className="rounded-lg border border-border bg-surface px-3 py-2.5 font-[family-name:var(--font-display)] text-sm text-primary focus:border-accent focus:outline-none disabled:opacity-50"
                         >
-                          {isResuming ? (
+                          {AVAILABLE_MODELS.map(m => (
+                            <option key={m} value={m}>{m}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={handleStartBenchmark}
+                          disabled={benchmarkBusy}
+                          className="rounded-lg bg-[var(--clr-best)] px-6 py-2.5 font-[family-name:var(--font-display)] text-sm font-semibold text-white transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {isBenchmarking ? (
                             <span className="flex items-center gap-2">
-                              <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-accent/30 border-t-accent" />
-                              Resuming...
+                              <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                              Benchmarking...
                             </span>
                           ) : (
-                            "Resume Tournament"
+                            "Start Benchmark"
                           )}
                         </button>
-                      )}
+                      </div>
                     </div>
                     {startError && (
                       <p className="mt-2 text-xs text-[var(--clr-blunder)]">

@@ -1,8 +1,8 @@
-# ChessBench — LLM Chess Arena
+# ChessBench — LLM Chess Benchmark
 
 ## Project Overview
 
-ChessBench is an LLM Chess Arena — a platform where LLMs (like Claude, GPT-5.2, Gemini) play chess against each other and against Stockfish. Games are analyzed move-by-move by Stockfish in real-time, providing Elo ratings, accuracy metrics, and live spectating via WebSocket. It uses OpenRouter as a unified API gateway for LLMs.
+ChessBench is an LLM Chess Benchmark — a platform where LLMs (like Claude, GPT-5.2, Gemini) play chess against Stockfish. Games are analyzed move-by-move by Stockfish in real-time, providing Elo ratings estimated from CPL, accuracy metrics, and live spectating via WebSocket. It uses OpenRouter as a unified API gateway for LLMs.
 
 ### Tech Stack
 
@@ -12,8 +12,8 @@ ChessBench is an LLM Chess Arena — a platform where LLMs (like Claude, GPT-5.2
 
 ## Architecture
 
-*   **Frontend:** Provides a live spectating interface with an interactive board, evaluation bars, move lists, and tournament scoreboards. It communicates with the backend via REST API and WebSocket for real-time updates.
-*   **Backend:** Consists of a FastAPI server handling REST endpoints and WebSocket connections. It includes a `GameOrchestrator` for the core game loop, `StockfishAnalyzer` for real-time move evaluation, and `TournamentManager` for scheduling and Elo updates.
+*   **Frontend:** Provides a live spectating interface with an interactive board, evaluation bars, move lists, and benchmark scoreboards. It communicates with the backend via REST API and WebSocket for real-time updates.
+*   **Backend:** Consists of a FastAPI server handling REST endpoints and WebSocket connections. It includes a `GameOrchestrator` for the core game loop, `StockfishAnalyzer` for real-time move evaluation, and `BenchmarkManager` for scheduling LLM vs Stockfish games and CPL-to-Elo estimation.
 *   **Player Adapters:** Interfaces for different players (`LLMPlayer` via OpenRouter and `UCIEnginePlayer` for Stockfish).
 *   **Data Layer:** SQLite database (managed via SQLModel) storing players, games, per-move analysis, and tournaments.
 
@@ -49,7 +49,7 @@ ChessBench is an LLM Chess Arena — a platform where LLMs (like Claude, GPT-5.2
 *   **Language:** Python 3.11+
 *   **Style:** PEP 8, 4-space indentation, explicit type hints. Use `snake_case` for modules/functions/variables, `PascalCase` for classes, and `UPPER_SNAKE_CASE` for constants.
 *   **API:** Define response schemas in `api/models.py`. Do not use ad-hoc response dictionaries in route handlers.
-*   **Testing:** Use `pytest` and `pytest-asyncio`. Test names should describe behavior (e.g., `test_start_tournament_rejects_when_running`).
+*   **Testing:** Use `pytest` and `pytest-asyncio`. Test names should describe behavior (e.g., `test_benchmark_manager_rejects_concurrent_run`).
 *   **LLM Integration:** All LLM calls should go through the OpenRouter API.
 
 ### Frontend

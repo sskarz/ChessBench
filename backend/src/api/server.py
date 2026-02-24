@@ -6,7 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
@@ -17,6 +17,7 @@ from sqlmodel import Session, select
 from src.api.models import (
     AccuracyDistribution,
     BenchmarkStartRequest,
+    BenchmarkStartResponse,
     GameAnalysisResponse,
     GameDetail,
     GameListResponse,
@@ -26,14 +27,12 @@ from src.api.models import (
     MoveAnalysisEntry,
     PlayerStats,
     StandingsEntry,
-    TournamentStartRequest,
-    TournamentStartResponse,
 )
 from src.config import settings
-from src.db.models import Game, MoveAnalysis, Player, Tournament
+from src.db.models import Game, MoveAnalysis, Player
 from src.db.session import engine, get_session, init_db
 from src.game.player_factory import build_players_from_settings, describe_player_config
-from src.game.tournament import TournamentManager
+from src.game.tournament import BenchmarkManager
 from src.players.base import PlayerAdapter
 from src.players.engine_player import UCIEnginePlayer
 
@@ -83,7 +82,7 @@ class AppRuntime:
     def __init__(self) -> None:
         self.manager = ConnectionManager()
         self.live = LiveState(updated_at=datetime.utcnow())
-        self.tournament_task: asyncio.Task[Any] | None = None
+        self.benchmark_task: asyncio.Task[Any] | None = None
 
 
 runtime = AppRuntime()
@@ -121,44 +120,15 @@ app.add_middleware(
 )
 
 
-def _standings_from_db(
-    session: Session,
-    sort_by: Literal["tournament", "benchmark"] = "tournament",
-) -> list[StandingsEntry]:
+def _standings_from_db(session: Session) -> list[StandingsEntry]:
     players = session.exec(select(Player)).all()
     standings: list[StandingsEntry] = []
 
-    # Pre-load tournament IDs by format for blunder rate separation
-    benchmark_tournament_ids: set[int] = set()
-    all_tournaments = session.exec(select(Tournament)).all()
-    for t in all_tournaments:
-        if t.id is not None and t.format == "benchmark":
-            benchmark_tournament_ids.add(t.id)
-
     for player in players:
-        # Hide benchmark anchor rows from standings.
         if _is_benchmark_anchor_row(player):
             continue
 
-        games = session.exec(
-            select(Game).where(
-                or_(Game.white_id == player.id, Game.black_id == player.id),
-                Game.status == "completed",
-            )
-        ).all()
-
-        tournament_blunders = 0
-        tournament_game_count = 0
-        for game in games:
-            b = game.white_blunders if game.white_id == player.id else game.black_blunders
-            if game.tournament_id is not None and game.tournament_id in benchmark_tournament_ids:
-                continue
-            else:
-                tournament_blunders += b
-                tournament_game_count += 1
-
-        blunder_rate = tournament_blunders / max(tournament_game_count, 1)
-        benchmark_blunder_rate = player.benchmark_total_blunders / max(player.benchmark_games_played, 1)
+        blunder_rate = player.total_blunders / max(player.games_played, 1)
 
         standings.append(
             StandingsEntry(
@@ -178,19 +148,10 @@ def _standings_from_db(
                 avg_cpl=round(player.avg_cpl, 1),
                 blunder_rate=round(blunder_rate, 2),
                 total_cost_usd=round(player.total_cost_usd, 4),
-                benchmark_elo=round(player.benchmark_elo, 1),
-                benchmark_wins=player.benchmark_wins,
-                benchmark_losses=player.benchmark_losses,
-                benchmark_draws=player.benchmark_draws,
-                benchmark_avg_accuracy=round(player.benchmark_avg_accuracy, 1),
-                benchmark_avg_cpl=round(player.benchmark_avg_cpl, 1),
-                benchmark_blunder_rate=round(benchmark_blunder_rate, 2),
-                benchmark_total_cost_usd=round(player.benchmark_total_cost_usd, 4),
             )
         )
 
-    key = "elo" if sort_by == "tournament" else "benchmark_elo"
-    standings.sort(key=lambda row: (-getattr(row, key), row.name))
+    standings.sort(key=lambda row: (-row.elo, row.name))
     return standings
 
 
@@ -208,7 +169,7 @@ def _player_name_map(session: Session, games: list[Game]) -> dict[int, str]:
     return mapping
 
 
-async def _handle_tournament_event(event: dict[str, Any]) -> None:
+async def _handle_benchmark_event(event: dict[str, Any]) -> None:
     runtime.live.updated_at = _now()
     runtime.live.last_event = event
 
@@ -233,7 +194,6 @@ async def _handle_tournament_event(event: dict[str, Any]) -> None:
         runtime.live.last_events.pop(game_id, None)
         standings = event.get("standings", [])
         runtime.live.latest_standings = standings if isinstance(standings, list) else []
-        # Update current_game to next active game or None
         if runtime.live.active_games:
             runtime.live.current_game = next(iter(runtime.live.active_games.values()))
         else:
@@ -258,104 +218,19 @@ def _live_response() -> LiveStateResponse:
     )
 
 
-def _build_tournament_manager(
+def _build_benchmark_manager(
     players: list[PlayerAdapter],
     descriptors: dict[str, dict[str, str]],
     rounds: int,
-) -> TournamentManager:
-    manager = TournamentManager(
+) -> BenchmarkManager:
+    return BenchmarkManager(
         players=players,
         session_factory=_new_session,
-        event_callback=_handle_tournament_event,
+        event_callback=_handle_benchmark_event,
         rounds=rounds,
         player_descriptors=descriptors,
         settings=settings,
     )
-
-    return manager
-
-
-async def _run_tournament(
-    run_id: str,
-    rounds: int,
-    players: list[PlayerAdapter],
-    descriptors: dict[str, dict[str, str]],
-) -> None:
-    manager = _build_tournament_manager(players, descriptors, rounds)
-
-    try:
-        summary = await manager.run_round_robin(rounds=rounds)
-        runtime.live.status = "completed"
-        runtime.live.latest_standings = summary.get("standings", [])
-        runtime.live.current_game = None
-        runtime.live.active_games.clear()
-        runtime.live.last_events.clear()
-        runtime.live.last_event = {
-            "type": "tournament_complete",
-            "run_id": run_id,
-            "games_played": summary.get("games_played", 0),
-            "standings": summary.get("standings", []),
-        }
-        await runtime.manager.broadcast(runtime.live.last_event)
-    except Exception as exc:
-        runtime.live.status = "error"
-        runtime.live.error = str(exc)
-        runtime.live.current_game = None
-        runtime.live.active_games.clear()
-        runtime.live.last_events.clear()
-        runtime.live.last_event = {
-            "type": "tournament_error",
-            "run_id": run_id,
-            "error": str(exc),
-        }
-        await runtime.manager.broadcast(runtime.live.last_event)
-        logger.exception("Tournament run failed")
-    finally:
-        runtime.live.updated_at = _now()
-        runtime.tournament_task = None
-        manager.cleanup_players(players)
-
-
-async def _resume_tournament(
-    run_id: str,
-    tournament_id: int,
-    players: list[PlayerAdapter],
-    descriptors: dict[str, dict[str, str]],
-    rounds: int,
-) -> None:
-    manager = _build_tournament_manager(players, descriptors, rounds)
-
-    try:
-        summary = await manager.resume_round_robin(tournament_id=tournament_id)
-        runtime.live.status = "completed"
-        runtime.live.latest_standings = summary.get("standings", [])
-        runtime.live.current_game = None
-        runtime.live.active_games.clear()
-        runtime.live.last_events.clear()
-        runtime.live.last_event = {
-            "type": "tournament_complete",
-            "run_id": run_id,
-            "games_played": summary.get("games_played", 0),
-            "standings": summary.get("standings", []),
-        }
-        await runtime.manager.broadcast(runtime.live.last_event)
-    except Exception as exc:
-        runtime.live.status = "error"
-        runtime.live.error = str(exc)
-        runtime.live.current_game = None
-        runtime.live.active_games.clear()
-        runtime.live.last_events.clear()
-        runtime.live.last_event = {
-            "type": "tournament_error",
-            "run_id": run_id,
-            "error": str(exc),
-        }
-        await runtime.manager.broadcast(runtime.live.last_event)
-        logger.exception("Tournament resume failed")
-    finally:
-        runtime.live.updated_at = _now()
-        runtime.tournament_task = None
-        manager.cleanup_players(players)
 
 
 async def _run_benchmark(
@@ -364,7 +239,7 @@ async def _run_benchmark(
     descriptors: dict[str, dict[str, str]],
     rounds: int = 1,
 ) -> None:
-    manager = _build_tournament_manager(players, descriptors, rounds=rounds)
+    manager = _build_benchmark_manager(players, descriptors, rounds=rounds)
 
     try:
         summary = await manager.run_benchmark(rounds=rounds)
@@ -374,7 +249,7 @@ async def _run_benchmark(
         runtime.live.active_games.clear()
         runtime.live.last_events.clear()
         runtime.live.last_event = {
-            "type": "tournament_complete",
+            "type": "benchmark_complete",
             "run_id": run_id,
             "games_played": summary.get("games_played", 0),
             "standings": summary.get("standings", []),
@@ -387,7 +262,7 @@ async def _run_benchmark(
         runtime.live.active_games.clear()
         runtime.live.last_events.clear()
         runtime.live.last_event = {
-            "type": "tournament_error",
+            "type": "benchmark_error",
             "run_id": run_id,
             "error": str(exc),
         }
@@ -395,7 +270,7 @@ async def _run_benchmark(
         logger.exception("Benchmark run failed")
     finally:
         runtime.live.updated_at = _now()
-        runtime.tournament_task = None
+        runtime.benchmark_task = None
         manager.cleanup_players(players)
 
 
@@ -420,154 +295,10 @@ async def live_game_ws(ws: WebSocket) -> None:
         runtime.manager.disconnect(ws)
 
 
-@app.post("/api/tournament/start", response_model=TournamentStartResponse, status_code=status.HTTP_202_ACCEPTED)
-async def start_tournament(payload: TournamentStartRequest) -> TournamentStartResponse:
-    if runtime.tournament_task and not runtime.tournament_task.done():
-        raise HTTPException(status_code=409, detail="Tournament is already running")
-
-    players, player_errors = build_players_from_settings(settings)
-    if player_errors:
-        logger.error(
-            "Refusing tournament start because some players failed to initialize "
-            "(initialized=%d configured=%d stockfish_path=%s errors=%s)",
-            len(players),
-            len(settings.players),
-            settings.stockfish_path,
-            player_errors,
-        )
-        detail = {
-            "message": "One or more configured players failed to initialize",
-            "errors": player_errors,
-            "configured_players": len(settings.players),
-            "initialized_players": len(players),
-        }
-        raise HTTPException(status_code=400, detail=detail)
-
-    if len(players) < 2:
-        detail = {
-            "message": "Need at least 2 valid players to start tournament",
-            "errors": player_errors,
-            "configured_players": len(settings.players),
-            "initialized_players": len(players),
-        }
-        raise HTTPException(status_code=400, detail=detail)
-
-    run_id = uuid4().hex[:10]
-    runtime.live = LiveState(
-        status="running",
-        run_id=run_id,
-        current_game=None,
-        last_event={"type": "tournament_queued", "run_id": run_id},
-        latest_standings=[],
-        started_at=_now(),
-        updated_at=_now(),
-        error=None,
-    )
-    player_configs = [describe_player_config(player) for player in players]
-
-    runtime.tournament_task = asyncio.create_task(
-        _run_tournament(
-            run_id=run_id,
-            rounds=payload.rounds,
-            players=players,
-            descriptors={row["name"]: row for row in player_configs},
-        )
-    )
-
-    return TournamentStartResponse(
-        status="accepted",
-        run_id=run_id,
-        rounds=payload.rounds,
-        players=player_configs,
-    )
-
-
-@app.post("/api/tournament/resume", response_model=TournamentStartResponse, status_code=status.HTTP_202_ACCEPTED)
-async def resume_tournament(session: Session = Depends(get_session)) -> TournamentStartResponse:
-    if runtime.tournament_task and not runtime.tournament_task.done():
-        raise HTTPException(status_code=409, detail="Tournament is already running")
-
-    # Find the most recent resumable tournament
-    tournament = session.exec(
-        select(Tournament)
-        .where(Tournament.status.in_(["running", "error"]))
-        .order_by(Tournament.id.desc())
-    ).first()
-
-    if tournament is None:
-        raise HTTPException(status_code=404, detail="No resumable tournament found")
-
-    stored_names: list[str] = json.loads(tournament.player_names_json)
-    if not stored_names:
-        raise HTTPException(status_code=400, detail="Tournament has no stored player roster")
-
-    players, player_errors = build_players_from_settings(settings)
-    if player_errors:
-        logger.error(
-            "Refusing tournament resume because some players failed to initialize "
-            "(initialized=%d configured=%d stockfish_path=%s errors=%s)",
-            len(players),
-            len(settings.players),
-            settings.stockfish_path,
-            player_errors,
-        )
-        detail = {
-            "message": "One or more configured players failed to initialize",
-            "errors": player_errors,
-            "configured_players": len(settings.players),
-            "initialized_players": len(players),
-        }
-        raise HTTPException(status_code=400, detail=detail)
-
-    available_names = {p.get_name() for p in players}
-
-    missing = [name for name in stored_names if name not in available_names]
-    if missing:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Tournament players not available: {', '.join(missing)}",
-        )
-
-    # Reorder players to match stored order
-    player_map = {p.get_name(): p for p in players}
-    ordered_players = [player_map[name] for name in stored_names]
-
-    run_id = uuid4().hex[:10]
-    runtime.live = LiveState(
-        status="running",
-        run_id=run_id,
-        current_game=None,
-        last_event={"type": "tournament_queued", "run_id": run_id},
-        latest_standings=[],
-        started_at=_now(),
-        updated_at=_now(),
-        error=None,
-    )
-
-    player_configs = [describe_player_config(player) for player in ordered_players]
-
-    runtime.tournament_task = asyncio.create_task(
-        _resume_tournament(
-            run_id=run_id,
-            tournament_id=tournament.id,
-            players=ordered_players,
-            descriptors={row["name"]: row for row in player_configs},
-            rounds=tournament.rounds,
-        )
-    )
-
-    return TournamentStartResponse(
-        status="accepted",
-        run_id=run_id,
-        rounds=tournament.rounds,
-        players=player_configs,
-    )
-
-
-@app.post("/api/benchmark/start", response_model=TournamentStartResponse, status_code=status.HTTP_202_ACCEPTED)
-async def start_benchmark(body: BenchmarkStartRequest = BenchmarkStartRequest()) -> TournamentStartResponse:
-    if runtime.tournament_task and not runtime.tournament_task.done():
-        raise HTTPException(status_code=409, detail="Tournament is already running")
+@app.post("/api/benchmark/start", response_model=BenchmarkStartResponse, status_code=status.HTTP_202_ACCEPTED)
+async def start_benchmark(body: BenchmarkStartRequest = BenchmarkStartRequest()) -> BenchmarkStartResponse:
+    if runtime.benchmark_task and not runtime.benchmark_task.done():
+        raise HTTPException(status_code=409, detail="Benchmark is already running")
 
     # Build LLM players from settings (filter out engine-type players)
     players, player_errors = build_players_from_settings(settings)
@@ -589,6 +320,11 @@ async def start_benchmark(body: BenchmarkStartRequest = BenchmarkStartRequest())
         raise HTTPException(status_code=400, detail=detail)
 
     llm_players = [p for p in players if not isinstance(p, UCIEnginePlayer)]
+
+    if body.player_name:
+        llm_players = [p for p in llm_players if p.name == body.player_name]
+        if not llm_players:
+            raise HTTPException(status_code=400, detail=f"LLM player '{body.player_name}' not found")
 
     if not llm_players:
         raise HTTPException(status_code=400, detail="No LLM players available for benchmark")
@@ -612,14 +348,14 @@ async def start_benchmark(body: BenchmarkStartRequest = BenchmarkStartRequest())
         status="running",
         run_id=run_id,
         current_game=None,
-        last_event={"type": "tournament_queued", "run_id": run_id},
+        last_event={"type": "benchmark_queued", "run_id": run_id},
         latest_standings=[],
         started_at=_now(),
         updated_at=_now(),
         error=None,
     )
 
-    runtime.tournament_task = asyncio.create_task(
+    runtime.benchmark_task = asyncio.create_task(
         _run_benchmark(
             run_id=run_id,
             players=all_players,
@@ -628,7 +364,7 @@ async def start_benchmark(body: BenchmarkStartRequest = BenchmarkStartRequest())
         )
     )
 
-    return TournamentStartResponse(
+    return BenchmarkStartResponse(
         status="accepted",
         run_id=run_id,
         rounds=body.rounds,
@@ -638,10 +374,9 @@ async def start_benchmark(body: BenchmarkStartRequest = BenchmarkStartRequest())
 
 @app.get("/api/standings", response_model=list[StandingsEntry])
 async def get_standings(
-    mode: Literal["tournament", "benchmark"] = "tournament",
     session: Session = Depends(get_session),
 ) -> list[StandingsEntry]:
-    return _standings_from_db(session, sort_by=mode)
+    return _standings_from_db(session)
 
 
 @app.get("/api/games", response_model=GameListResponse)
@@ -757,39 +492,13 @@ async def get_player_stats(player_name: str, session: Session = Depends(get_sess
     if player is None:
         raise HTTPException(status_code=404, detail="Player not found")
 
-    # Pre-load benchmark tournament IDs for blunder rate separation
-    benchmark_tournament_ids: set[int] = set()
-    all_tournaments = session.exec(select(Tournament)).all()
-    for t in all_tournaments:
-        if t.id is not None and t.format == "benchmark":
-            benchmark_tournament_ids.add(t.id)
-
-    games = session.exec(
-        select(Game).where(
-            or_(Game.white_id == player.id, Game.black_id == player.id),
-            Game.status == "completed",
-        )
-    ).all()
-
-    tournament_blunders = 0
-    tournament_game_count = 0
-    for game in games:
-        b = game.white_blunders if game.white_id == player.id else game.black_blunders
-        if game.tournament_id is not None and game.tournament_id in benchmark_tournament_ids:
-            continue
-        else:
-            tournament_blunders += b
-            tournament_game_count += 1
-
-    blunder_rate = tournament_blunders / max(tournament_game_count, 1)
-    benchmark_blunder_rate = player.benchmark_total_blunders / max(player.benchmark_games_played, 1)
+    blunder_rate = player.total_blunders / max(player.games_played, 1)
 
     return PlayerStats(
         name=player.name,
         provider=player.provider,
         model_id=player.model_id,
         elo=round(player.elo, 1),
-        rd=round(player.rd, 1),
         elo_white=round(player.elo_white, 1),
         elo_black=round(player.elo_black, 1),
         elo_confidence=player.elo_confidence,
@@ -806,23 +515,12 @@ async def get_player_stats(player_name: str, session: Session = Depends(get_sess
         total_tokens=player.total_tokens,
         total_cost_usd=round(player.total_cost_usd, 4),
         blunder_rate=round(blunder_rate, 2),
-        benchmark_elo=round(player.benchmark_elo, 1),
-        benchmark_games_played=player.benchmark_games_played,
-        benchmark_wins=player.benchmark_wins,
-        benchmark_losses=player.benchmark_losses,
-        benchmark_draws=player.benchmark_draws,
-        benchmark_avg_cpl=round(player.benchmark_avg_cpl, 1),
-        benchmark_avg_accuracy=round(player.benchmark_avg_accuracy, 1),
-        benchmark_total_tokens=player.benchmark_total_tokens,
-        benchmark_total_cost_usd=round(player.benchmark_total_cost_usd, 4),
-        benchmark_blunder_rate=round(benchmark_blunder_rate, 2),
     )
 
 
 @app.get("/api/players/{player_name}/accuracy-distribution", response_model=AccuracyDistribution)
 async def get_player_accuracy_distribution(
     player_name: str,
-    mode: Literal["tournament", "benchmark", "all"] = "tournament",
     session: Session = Depends(get_session),
 ) -> AccuracyDistribution:
     player = session.exec(select(Player).where(Player.name == player_name)).first()
@@ -835,25 +533,6 @@ async def get_player_accuracy_distribution(
             Game.status == "completed",
         )
     ).all()
-
-    if not games:
-        return AccuracyDistribution()
-
-    if mode != "all":
-        benchmark_tournament_ids: set[int] = set()
-        all_tournaments = session.exec(select(Tournament)).all()
-        for t in all_tournaments:
-            if t.id is not None and t.format == "benchmark":
-                benchmark_tournament_ids.add(t.id)
-
-        filtered_games: list[Game] = []
-        for g in games:
-            is_benchmark = g.tournament_id is not None and g.tournament_id in benchmark_tournament_ids
-            if mode == "benchmark" and is_benchmark:
-                filtered_games.append(g)
-            if mode == "tournament" and not is_benchmark:
-                filtered_games.append(g)
-        games = filtered_games
 
     if not games:
         return AccuracyDistribution()

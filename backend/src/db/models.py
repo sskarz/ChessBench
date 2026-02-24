@@ -10,9 +10,7 @@ class Player(SQLModel, table=True):
     name: str = Field(index=True, unique=True)
     provider: str
     model_id: str
-    elo: float = Field(default=1200.0)
-    rd: float = Field(default=350.0)
-    volatility: float = Field(default=0.06)
+    elo: float = Field(default=0.0)
     elo_white: float = Field(default=0.0)
     elo_black: float = Field(default=0.0)
     elo_confidence: str = Field(default="none")
@@ -28,17 +26,7 @@ class Player(SQLModel, table=True):
     avg_accuracy: float = Field(default=0.0)
     total_tokens: int = Field(default=0)
     total_cost_usd: float = Field(default=0.0)
-    # Benchmark-specific stats
-    benchmark_elo: float = Field(default=0.0)
-    benchmark_games_played: int = Field(default=0)
-    benchmark_wins: int = Field(default=0)
-    benchmark_losses: int = Field(default=0)
-    benchmark_draws: int = Field(default=0)
-    benchmark_avg_cpl: float = Field(default=0.0)
-    benchmark_avg_accuracy: float = Field(default=0.0)
-    benchmark_total_tokens: int = Field(default=0)
-    benchmark_total_cost_usd: float = Field(default=0.0)
-    benchmark_total_blunders: int = Field(default=0)
+    total_blunders: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

@@ -31,7 +31,6 @@ export const CLASSIFICATION_ICONS: Record<MoveClassification, string> = {
 export interface StandingsEntry {
   name: string;
   elo: number;
-  rd: number;
   elo_white: number;
   elo_black: number;
   elo_confidence: "none" | "low" | "high";
@@ -46,14 +45,6 @@ export interface StandingsEntry {
   avg_cpl: number;
   blunder_rate: number;
   total_cost_usd: number;
-  benchmark_elo: number;
-  benchmark_wins: number;
-  benchmark_losses: number;
-  benchmark_draws: number;
-  benchmark_avg_accuracy: number;
-  benchmark_avg_cpl: number;
-  benchmark_blunder_rate: number;
-  benchmark_total_cost_usd: number;
 }
 
 export interface GameSummary {
@@ -123,7 +114,6 @@ export interface PlayerStats {
   provider: string;
   model_id: string;
   elo: number;
-  rd: number;
   elo_white: number;
   elo_black: number;
   elo_confidence: "none" | "low" | "high";
@@ -140,16 +130,6 @@ export interface PlayerStats {
   total_tokens: number;
   total_cost_usd: number;
   blunder_rate: number;
-  benchmark_elo: number;
-  benchmark_games_played: number;
-  benchmark_wins: number;
-  benchmark_losses: number;
-  benchmark_draws: number;
-  benchmark_avg_cpl: number;
-  benchmark_avg_accuracy: number;
-  benchmark_total_tokens: number;
-  benchmark_total_cost_usd: number;
-  benchmark_blunder_rate: number;
 }
 
 export interface AccuracyDistribution {
@@ -185,7 +165,7 @@ export interface LiveStateResponse {
   error: string | null;
 }
 
-export interface TournamentStartResponse {
+export interface BenchmarkStartResponse {
   status: string;
   run_id: string;
   rounds: number;
@@ -234,26 +214,21 @@ export interface GameEndEvent {
   standings: StandingsEntry[];
 }
 
-export interface TournamentCompleteEvent {
-  type: "tournament_complete";
+export interface BenchmarkCompleteEvent {
+  type: "benchmark_complete";
   run_id: string;
   games_played: number;
   standings: StandingsEntry[];
 }
 
-export interface TournamentErrorEvent {
-  type: "tournament_error";
+export interface BenchmarkErrorEvent {
+  type: "benchmark_error";
   run_id: string;
   error: string;
 }
 
-export interface TournamentQueuedEvent {
-  type: "tournament_queued";
-  run_id: string;
-}
-
-export interface TournamentResumedEvent {
-  type: "tournament_resumed";
+export interface BenchmarkQueuedEvent {
+  type: "benchmark_queued";
   run_id: string;
 }
 
@@ -261,7 +236,6 @@ export type WSEvent =
   | GameStartEvent
   | MoveEvent
   | GameEndEvent
-  | TournamentCompleteEvent
-  | TournamentErrorEvent
-  | TournamentQueuedEvent
-  | TournamentResumedEvent;
+  | BenchmarkCompleteEvent
+  | BenchmarkErrorEvent
+  | BenchmarkQueuedEvent;

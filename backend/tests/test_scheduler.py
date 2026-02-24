@@ -8,7 +8,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from src.config import Settings
 from src.db.models import Game, Tournament
-from src.game.tournament import TournamentManager
+from src.game.tournament import BenchmarkManager
 from src.players.base import MoveResult, PlayerAdapter
 
 
@@ -21,67 +21,6 @@ class DummyPlayer(PlayerAdapter):
 
     def get_move(self, board, game_history) -> MoveResult:
         raise NotImplementedError
-
-
-class FakeOrchestrator:
-    """Unused — kept to satisfy any leftover references."""
-
-    def __init__(self) -> None:
-        self.event_callback = None
-        self.on_move_recorded = None
-        self.calls = 0
-
-    async def play_game(self, game_id: int, white: PlayerAdapter, black: PlayerAdapter, resume=None) -> dict:
-        self.calls += 1
-        result = "1-0" if self.calls % 2 == 1 else "0-1"
-        move_analyses = [
-            {
-                "game_id": game_id,
-                "move_number": 1,
-                "color": "white",
-                "move_uci": "e2e4",
-                "move_san": "e4",
-                "fen_before": "start",
-                "fen_after": "after",
-                "eval_before_cp": 10,
-                "eval_after_cp": 12,
-                "best_move_uci": "e2e4",
-                "best_move_san": "e4",
-                "centipawn_loss": 0,
-                "classification": "best",
-                "think_time_ms": 15,
-                "tokens_used": 10,
-                "illegal_attempts": 0,
-            }
-        ]
-        if self.on_move_recorded:
-            for record in move_analyses:
-                await self.on_move_recorded(game_id, record)
-        return {
-            "game_id": game_id,
-            "white": white.get_name(),
-            "black": black.get_name(),
-            "result": result,
-            "termination": "max_moves",
-            "pgn": "1. e4 e5",
-            "moves_count": 2,
-            "white_avg_cpl": 20.0,
-            "black_avg_cpl": 30.0,
-            "white_accuracy": 82.0,
-            "black_accuracy": 75.0,
-            "white_blunders": 0,
-            "black_blunders": 1,
-            "white_mistakes": 0,
-            "black_mistakes": 1,
-            "white_illegal_attempts": 0,
-            "black_illegal_attempts": 0,
-            "white_tokens": 10,
-            "black_tokens": 11,
-            "white_cost_usd": 0.01,
-            "black_cost_usd": 0.02,
-            "duration_seconds": 0.5,
-            "move_analyses": move_analyses,
-        }
 
 
 def _session_factory(db_file: Path):
@@ -104,10 +43,10 @@ def _test_settings() -> Settings:
 
 
 @pytest.mark.asyncio
-async def test_parallel_scheduler_runs_4_player_tournament(tmp_path: Path, monkeypatch) -> None:
-    """With 4 players and max_concurrent=2, the scheduler should run 2 games at once."""
+async def test_parallel_scheduler_runs_benchmark(tmp_path: Path, monkeypatch) -> None:
+    """Benchmark with 2 LLMs + Stockfish should run 4 games (2 per LLM)."""
     session_factory = _session_factory(tmp_path / "arena_parallel.db")
-    players = [DummyPlayer("A"), DummyPlayer("B"), DummyPlayer("C"), DummyPlayer("D")]
+    players = [DummyPlayer("A"), DummyPlayer("B"), DummyPlayer("Stockfish-800")]
     events: list[dict] = []
     concurrent_games: list[int] = []
     active_count = 0
@@ -121,7 +60,6 @@ async def test_parallel_scheduler_runs_4_player_tournament(tmp_path: Path, monke
         elif event["type"] == "game_end":
             active_count -= 1
 
-    # Monkeypatch StockfishAnalyzer and GameOrchestrator to avoid needing real Stockfish
     import src.game.scheduler as sched_mod
 
     class FakeAnalyzer:
@@ -139,7 +77,6 @@ async def test_parallel_scheduler_runs_4_player_tournament(tmp_path: Path, monke
 
         async def play_game(self, game_id, white, black, resume=None):
             FakeGameOrchestrator._call_counter += 1
-            # Small delay to simulate work
             await asyncio.sleep(0.01)
             result = "1-0" if FakeGameOrchestrator._call_counter % 2 == 1 else "0-1"
             move_analyses = [{
@@ -194,116 +131,42 @@ async def test_parallel_scheduler_runs_4_player_tournament(tmp_path: Path, monke
 
     test_settings = _test_settings()
 
-    manager = TournamentManager(
+    manager = BenchmarkManager(
         players=players,
         session_factory=session_factory,
         event_callback=on_event,
         rounds=1,
-        player_descriptors={p.get_name(): {"provider": "engine", "model": "stockfish"} for p in players},
+        player_descriptors={
+            "A": {"provider": "openrouter", "model": "test/a"},
+            "B": {"provider": "openrouter", "model": "test/b"},
+            "Stockfish-800": {"provider": "engine", "model": "stockfish"},
+        },
         settings=test_settings,
     )
 
-    summary = await manager.run_round_robin()
+    summary = await manager.run_benchmark()
 
-    # 4 players = C(4,2) = 6 pairs * 2 colors = 12 games per round
-    assert summary["games_played"] == 12
-    assert len([e for e in events if e["type"] == "game_start"]) == 12
-    assert len([e for e in events if e["type"] == "game_end"]) == 12
+    # 2 LLMs * 2 games each (white + black vs Stockfish) = 4 games
+    assert summary["games_played"] == 4
+    assert len([e for e in events if e["type"] == "game_start"]) == 4
+    assert len([e for e in events if e["type"] == "game_end"]) == 4
 
-    # At some point we should have had 2 concurrent games
+    # Should have had 2 concurrent games at some point
     assert max(concurrent_games) == 2
 
     with session_factory() as session:
         games = session.exec(select(Game).where(Game.status == "completed")).all()
-        assert len(games) == 12
+        assert len(games) == 4
 
         tournament = session.exec(select(Tournament)).first()
         assert tournament.status == "completed"
 
 
 @pytest.mark.asyncio
-async def test_parallel_scheduler_respects_max_concurrent(tmp_path: Path, monkeypatch) -> None:
-    """max_concurrent_games=1 should run games sequentially."""
-    session_factory = _session_factory(tmp_path / "arena_seq.db")
-    players = [DummyPlayer("A"), DummyPlayer("B"), DummyPlayer("C")]
-    concurrent_games: list[int] = []
-    active_count = 0
-
-    async def on_event(event: dict) -> None:
-        nonlocal active_count
-        if event["type"] == "game_start":
-            active_count += 1
-            concurrent_games.append(active_count)
-        elif event["type"] == "game_end":
-            active_count -= 1
-
-    import src.game.scheduler as sched_mod
-
-    class FakeAnalyzer:
-        def shutdown(self):
-            pass
-
-    class FakeGameOrchestrator:
-        _call_counter = 0
-
-        def __init__(self, **kwargs):
-            self.event_callback = kwargs.get("event_callback")
-            self.on_move_recorded = None
-            self.config = kwargs.get("config")
-            self.analyzer = kwargs.get("analyzer")
-
-        async def play_game(self, game_id, white, black, resume=None):
-            FakeGameOrchestrator._call_counter += 1
-            await asyncio.sleep(0.01)
-            return {
-                "game_id": game_id,
-                "white": white.get_name(),
-                "black": black.get_name(),
-                "result": "1/2-1/2",
-                "termination": "max_moves",
-                "pgn": "1. e4 e5",
-                "moves_count": 2,
-                "white_avg_cpl": 20.0, "black_avg_cpl": 30.0,
-                "white_accuracy": 82.0, "black_accuracy": 75.0,
-                "white_blunders": 0, "black_blunders": 0,
-                "white_mistakes": 0, "black_mistakes": 0,
-                "white_illegal_attempts": 0, "black_illegal_attempts": 0,
-                "white_tokens": 10, "black_tokens": 11,
-                "white_cost_usd": 0.01, "black_cost_usd": 0.02,
-                "duration_seconds": 0.5,
-                "move_analyses": [],
-            }
-
-    monkeypatch.setattr(sched_mod, "StockfishAnalyzer", lambda **kw: FakeAnalyzer())
-    monkeypatch.setattr(sched_mod, "GameOrchestrator", FakeGameOrchestrator)
-
-    test_settings = Settings(
-        stockfish_path="/usr/local/bin/stockfish",
-        max_concurrent_games=1,
-        move_delay_seconds=0,
-    )
-
-    manager = TournamentManager(
-        players=players,
-        session_factory=session_factory,
-        event_callback=on_event,
-        rounds=1,
-        player_descriptors={p.get_name(): {"provider": "engine", "model": "stockfish"} for p in players},
-        settings=test_settings,
-    )
-
-    summary = await manager.run_round_robin()
-    assert summary["games_played"] == 6  # 3 players = 3 pairs * 2 = 6
-
-    # With max_concurrent=1, never more than 1 game at a time
-    assert max(concurrent_games) == 1
-
-
-@pytest.mark.asyncio
 async def test_parallel_scheduler_handles_game_error(tmp_path: Path, monkeypatch) -> None:
-    """A game error should not crash the entire tournament."""
+    """A game error should not crash the entire benchmark."""
     session_factory = _session_factory(tmp_path / "arena_err.db")
-    players = [DummyPlayer("A"), DummyPlayer("B")]
+    players = [DummyPlayer("A"), DummyPlayer("Stockfish-800")]
     events: list[dict] = []
 
     async def on_event(event: dict) -> None:
@@ -353,16 +216,19 @@ async def test_parallel_scheduler_handles_game_error(tmp_path: Path, monkeypatch
 
     test_settings = _test_settings()
 
-    manager = TournamentManager(
+    manager = BenchmarkManager(
         players=players,
         session_factory=session_factory,
         event_callback=on_event,
         rounds=1,
-        player_descriptors={p.get_name(): {"provider": "engine", "model": "stockfish"} for p in players},
+        player_descriptors={
+            "A": {"provider": "openrouter", "model": "test/a"},
+            "Stockfish-800": {"provider": "engine", "model": "stockfish"},
+        },
         settings=test_settings,
     )
 
-    summary = await manager.run_round_robin()
+    summary = await manager.run_benchmark()
 
     # One game errored, one succeeded
     assert summary["games_played"] == 1
