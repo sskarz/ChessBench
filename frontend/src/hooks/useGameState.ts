@@ -9,7 +9,20 @@ import type {
   StandingsEntry,
 } from "@/lib/types";
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws/live";
+function getWsUrl(): string {
+  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
+  if (typeof window === "undefined") return "ws://localhost:8000/ws/live";
+  // Derive from NEXT_PUBLIC_API_URL or fall back to localhost for dev
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+  if (apiUrl) {
+    const proto = apiUrl.startsWith("https") ? "wss:" : "ws:";
+    const host = apiUrl.replace(/^https?:\/\//, "");
+    return `${proto}//${host}/ws/live`;
+  }
+  return "ws://localhost:8000/ws/live";
+}
+
+const WS_URL = getWsUrl();
 const STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
 export type BenchmarkStatus =
