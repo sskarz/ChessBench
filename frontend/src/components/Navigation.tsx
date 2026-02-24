@@ -32,7 +32,7 @@ export default function Navigation({ wsStatus = "disconnected", gameId }: Naviga
             className="invert"
           />
           <span className="font-[family-name:var(--font-display)] text-lg font-bold tracking-tight text-accent">
-            LLM Chess Arena
+            ChessBench
           </span>
         </Link>
 

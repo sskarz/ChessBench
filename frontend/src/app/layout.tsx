@@ -21,7 +21,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LLM Chess Arena",
+  title: "ChessBench",
   description:
     "Watch AI models battle on the chessboard. Live analysis, Elo ratings, and move-by-move accuracy.",
   icons: {
