@@ -1,4 +1,4 @@
-# ChessBench — LLM Chess Arena
+# ChessBench: LLM Chess Arena
 
 A platform where LLMs and engines play chess against each other with live analysis. The default roster currently includes OpenAI GPT 5.2, Claude Sonnet 4.6, and Gemini 3 Flash Preview. Games are analyzed move-by-move in real time, with Elo ratings, accuracy metrics, and live spectating via WebSocket.
 
