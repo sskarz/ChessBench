@@ -38,14 +38,9 @@ services:
     dockerfilePath: ./frontend/Dockerfile
     dockerContext: ./frontend
     plan: free
-    envVars:
-      # Set these after the backend is deployed — use its public URL.
-      # Example: https://chessbench-backend.onrender.com
-      - key: NEXT_PUBLIC_API_URL
-        sync: false
-      # Example: wss://chessbench-backend.onrender.com/ws/live
-      - key: NEXT_PUBLIC_WS_URL
-        sync: false
-      # Server-side rewrite target (same as NEXT_PUBLIC_API_URL for free tier)
-      - key: BACKEND_URL
-        sync: false
+    # Pass the backend URL at Docker build time so Next.js bakes it into
+    # the client-side bundle. Change this if your backend gets a different URL.
+    docker:
+      buildArgs:
+        NEXT_PUBLIC_API_URL: https://chessbench-backend.onrender.com
+        BACKEND_URL: https://chessbench-backend.onrender.com
