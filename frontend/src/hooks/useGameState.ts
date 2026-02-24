@@ -9,9 +9,15 @@ import type {
   StandingsEntry,
 } from "@/lib/types";
 
-/** Fallback used only during local development. */
-const DEFAULT_WS_URL = "ws://localhost:8000/ws/live";
 const STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+function getWsUrl(): string {
+  if (typeof window === "undefined") return "ws://localhost:8000/ws/live";
+  const env = process.env.NEXT_PUBLIC_WS_URL;
+  if (env) return env;
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}/ws/live`;
+}
 
 export type BenchmarkStatus =
   | "idle"
@@ -166,18 +172,7 @@ export interface UseGameStateReturn {
 
 export function useGameState(): UseGameStateReturn {
   const [state, dispatch] = useReducer(reducer, initialState);
-  const [wsUrl, setWsUrl] = useState(DEFAULT_WS_URL);
-
-  // Fetch the WebSocket URL from the server at runtime (avoids
-  // needing NEXT_PUBLIC_* build-time env vars).
-  useEffect(() => {
-    fetch("/api/config")
-      .then((r) => r.json())
-      .then((cfg: { wsUrl: string }) => {
-        if (cfg.wsUrl) setWsUrl(cfg.wsUrl);
-      })
-      .catch(() => {});
-  }, []);
+  const wsUrl = getWsUrl();
 
   const handleMessage = useCallback((event: WSEvent) => {
     switch (event.type) {
