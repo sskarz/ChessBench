@@ -1,21 +1,9 @@
 import type { NextConfig } from "next";
 
-const backendUrl = process.env.BACKEND_URL ?? "http://localhost:8000";
-
 const nextConfig: NextConfig = {
   output: "standalone",
-  async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${backendUrl}/api/:path*`,
-      },
-      {
-        source: "/health",
-        destination: `${backendUrl}/health`,
-      },
-    ];
-  },
+  // API proxying is handled by middleware.ts at runtime,
+  // so it works on any hosting provider without build-time env vars.
 };
 
 export default nextConfig;

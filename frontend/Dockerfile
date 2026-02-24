@@ -8,14 +8,6 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-# Build args for production deployments (Render, etc.)
-# When set, the frontend calls the backend directly instead of using rewrites.
-ARG NEXT_PUBLIC_API_URL
-ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
-# Server-side rewrite target — defaults to Docker Compose service name for local,
-# overridden by the build arg in production.
-ARG BACKEND_URL=http://backend:8000
-ENV BACKEND_URL=${BACKEND_URL}
 RUN npm run build
 
 FROM node:20-alpine AS runner

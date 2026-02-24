@@ -38,9 +38,9 @@ services:
     dockerfilePath: ./frontend/Dockerfile
     dockerContext: ./frontend
     plan: free
-    # Pass the backend URL at Docker build time so Next.js bakes it into
-    # the client-side bundle. Change this if your backend gets a different URL.
-    docker:
-      buildArgs:
-        NEXT_PUBLIC_API_URL: https://chessbench-backend.onrender.com
-        BACKEND_URL: https://chessbench-backend.onrender.com
+    envVars:
+      # The middleware and /api/config route read this at RUNTIME
+      # to proxy API requests and expose the WebSocket URL.
+      # Set this to your backend's public Render URL.
+      - key: BACKEND_URL
+        value: https://chessbench-backend.onrender.com
